@@ -1,0 +1,643 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Michelangelo Public API",
+    "version": "0.1.0",
+    "description": "Public API of the Michelangelo platform. This is the stable contract for the community: plugins, SDKs, MCP servers and third-party apps integrate here — never directly with the underlying backend.\nDesign rules (see ADR 0001): - Every long-running operation is an async **job** with state in the DB. - Auth is OAuth 2.1 + PKCE (Supabase as identity provider); tokens are\n  standard Supabase JWTs validated via JWKS.\n- All routes are versioned under `/v1`. Breaking changes ship as `/v2`.\n",
+    "contact": {
+      "name": "Michelangelo Community"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.michelangelo.land/v1",
+      "description": "Production"
+    },
+    {
+      "url": "https://michelangelo-api.giacomo-sardo98.workers.dev/v1",
+      "description": "Default workers.dev endpoint"
+    }
+  ],
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Identity introspection for the current token"
+    },
+    {
+      "name": "docs",
+      "description": "Machine-readable contract and interactive reference"
+    },
+    {
+      "name": "jobs",
+      "description": "Async long-running operations (prompts, builds, AI runs)"
+    },
+    {
+      "name": "projects",
+      "description": "Michelangelo projects owned by the authenticated user"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness check — no authentication required",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "API is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "docs"
+        ],
+        "operationId": "getOpenApiDocument",
+        "summary": "OpenAPI document as JSON — SDK generator feed",
+        "description": "Serves this very contract (`openapi/v1.yaml`) as JSON. Feed it to OpenAPI Generator, hey-api, orval, Postman/Insomnia — or open `GET /v1/docs` — to build a client without asking anyone. No authentication required.\n",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": [
+          "docs"
+        ],
+        "operationId": "getDocs",
+        "summary": "Interactive API reference (Scalar)",
+        "description": "Human-friendly reference rendered from `GET /v1/openapi.json`. No authentication required to open it (calling the listed endpoints still needs a token).\n",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "HTML page hosting the Scalar API reference",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whoami": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "getWhoami",
+        "summary": "Return the identity behind the current access token",
+        "description": "Cheap endpoint for clients to validate a token and discover the user, the OAuth client it was issued to, and the granted scopes. Backed by JWKS validation only — no upstream call required.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current token identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Whoami"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "createJob",
+        "summary": "Create an async job",
+        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateJobRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Job accepted and queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/jobs/{jobId}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "getJob",
+        "summary": "Get job status",
+        "description": "Polling endpoint. Clients should poll with backoff (suggested: 2s → 30s max). A future version may offer realtime delivery (SSE / Realtime) without changing this contract.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listProjects",
+        "summary": "List projects of the authenticated user",
+        "description": "Returns the authenticated user's own projects by default (`visibility=mine`). Pass `visibility=all` to also include public/shared community projects. RLS of the underlying backend applies on top: users can never see other people's private rows.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "description": "`mine` (default): only the caller's own projects. `all`: own projects plus public/shared community projects.\n",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mine",
+                "all"
+              ],
+              "default": "mine"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "getProject",
+        "summary": "Get a single project",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "oauth2": {
+        "type": "oauth2",
+        "description": "OAuth 2.1 authorization code flow with PKCE, issued by the Michelangelo auth server on auth.michelangelo.land — the upstream backend is an implementation detail. Third-party clients register via Dynamic Client Registration at /auth/v1/oauth/clients/register. Data APIs live under api.michelangelo.land/v1.\n",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://auth.michelangelo.land/auth/v1/oauth/authorize",
+            "tokenUrl": "https://auth.michelangelo.land/auth/v1/oauth/token",
+            "scopes": {}
+          }
+        }
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Supabase-issued JWT, validated by the API via JWKS"
+      }
+    },
+    "parameters": {
+      "JobId": {
+        "name": "jobId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "schemas": {
+      "Whoami": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "client_id"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "client_id": {
+            "type": "string",
+            "description": "OAuth client the token was issued to"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rate_limit": {
+            "type": "object",
+            "description": "Current quota snapshot for this client (when available)",
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "remaining": {
+                "type": "integer"
+              },
+              "reset_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "CreateJobRequest": {
+        "type": "object",
+        "required": [
+          "type",
+          "input"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "prompt"
+            ],
+            "description": "Job kind. Only `prompt` in v0.1; grows with the runner catalog"
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric project id (matches public.projects.id)"
+          },
+          "input": {
+            "type": "object",
+            "description": "Job-specific payload (e.g. the prompt text and options). `model` and `appName` are optional: when omitted the API evaluates the prompt server-side (ADR 0001 / D6) and fills them in before the runner picks up the job.\n",
+            "additionalProperties": true,
+            "properties": {
+              "prompt": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string",
+                "enum": [
+                  "light",
+                  "full"
+                ],
+                "description": "Vendor-neutral generation tier. `light`: faster and cheaper, for simple changes. `full`: deepest reasoning, for complex builds. The concrete model behind each tier is a server-side detail and may change over time. Server-enriched from prompt evaluation when absent.\n"
+              },
+              "appName": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Generated app name (first generation only); server-enriched when absent"
+              }
+            }
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "canceled"
+            ]
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric project id (matches public.projects.id), nullable"
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric project id (matches public.projects.id)"
+          },
+          "name": {
+            "type": "string"
+          },
+          "icon_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectPage": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Machine-readable error code (e.g. `job_not_found`)"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable detail"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request payload",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, expired or invalid token / signature",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource does not exist (or is not visible to this token)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Quota exceeded; retry after the indicated time",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

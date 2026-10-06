@@ -1,0 +1,49 @@
+{
+  "name": "@michelangelo-land/sdk",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Official Michelangelo SDK — dynamic OAuth 2.1 + PKCE auth with in-memory tokens, typed client generated from the OpenAPI contract (api.michelangelo.land/v1/openapi.json).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:michelangelo-land/sdk.git"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "react-native": "./dist/index.js",
+  "exports": {
+    ".": {
+      "react-native": "./dist/index.js",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node-loopback": {
+      "types": "./dist/node-loopback.d.ts",
+      "import": "./dist/node-loopback.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "openapi", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "type-check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "sync:openapi": "node scripts/sync-openapi.mjs",
+    "contract": "node scripts/contract-check.mjs",
+    "prepublishOnly": "npm run build",
+    "example:node-login": "tsx examples/node-login.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
