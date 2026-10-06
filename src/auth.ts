@@ -6,6 +6,7 @@ import {
   TOKEN_URL,
 } from "./config.js";
 import { MichelangeloAuthError } from "./errors.js";
+import { defaultFetch } from "./http.js";
 import { generateCodeChallenge, generateCodeVerifier, generateState, type PkceCrypto } from "./pkce.js";
 import type {
   RegisterClientInput,
@@ -65,7 +66,7 @@ export class AuthManager {
 
   constructor(options: AuthManagerOptions = {}) {
     this.authBaseUrl = (options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL).replace(/\/$/, "");
-    this.fetchFn = options.fetchFn ?? fetch;
+    this.fetchFn = options.fetchFn ?? defaultFetch;
     this.pkceCrypto = options.pkceCrypto;
     this.clientId = options.clientId;
   }

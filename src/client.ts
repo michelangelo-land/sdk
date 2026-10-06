@@ -2,6 +2,7 @@ import { AuthManager } from "./auth.js";
 import type { PkceCrypto } from "./pkce.js";
 import { DEFAULT_API_BASE_URL } from "./config.js";
 import { MichelangeloApiError } from "./errors.js";
+import { defaultFetch } from "./http.js";
 import type { ApiErrorBody, HealthResponse, Whoami } from "./types.js";
 
 export interface MichelangeloClientOptions {
@@ -38,7 +39,7 @@ export class MichelangeloClient {
 
   constructor(options: MichelangeloClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
-    this.fetchFn = options.fetchFn ?? fetch;
+    this.fetchFn = options.fetchFn ?? defaultFetch;
     this.auth = new AuthManager({
       authBaseUrl: options.authBaseUrl,
       clientId: options.clientId,

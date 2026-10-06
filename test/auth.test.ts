@@ -59,6 +59,26 @@ describe("auth dynamic flow", () => {
     assert.equal(auth.isAuthenticated(), false);
   });
 
+  it("calls the global fetch with its receiver (Hermes/WebView compat)", async () => {
+    // Hermes and some WebViews reject a detached `fetch` reference with
+    // "Can only call Window.fetch on instances of Window" — the SDK must
+    // invoke it as a method of globalThis.
+    const original = globalThis.fetch;
+    let receiver: unknown;
+    globalThis.fetch = function (this: unknown) {
+      receiver = this;
+      return Promise.resolve(json({ access_token: "tok-h", token_type: "Bearer" }));
+    } as typeof fetch;
+    try {
+      const auth = new AuthManager({ clientId: "c1" }); // no fetchFn → default
+      await auth.exchangeCode({ code: "c", codeVerifier: "v", redirectUri: "http://127.0.0.1:1/callback" });
+      assert.equal(receiver, globalThis);
+      assert.equal(auth.getAccessToken(), "tok-h");
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("registerClient stores the DCR client id", async () => {
     const fetchFn = stubFetch((url) => {
       assert.ok(String(url).endsWith("/oauth/clients/register"));

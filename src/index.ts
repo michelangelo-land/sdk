@@ -12,6 +12,7 @@ export {
   TOKEN_URL,
 } from "./config.js";
 export { MichelangeloApiError, MichelangeloAuthError } from "./errors.js";
+export { defaultFetch } from "./http.js";
 export { generateCodeChallenge, generateCodeVerifier, generateState, setPkceCrypto } from "./pkce.js";
 export type { PkceCrypto } from "./pkce.js";
 export type {
