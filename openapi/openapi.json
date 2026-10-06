@@ -28,6 +28,10 @@
       "description": "Identity introspection for the current token"
     },
     {
+      "name": "billing",
+      "description": "Wallet top-ups via Stripe Checkout (EUR)"
+    },
+    {
       "name": "docs",
       "description": "Machine-readable contract and interactive reference"
     },
@@ -38,6 +42,10 @@
     {
       "name": "projects",
       "description": "Michelangelo projects owned by the authenticated user"
+    },
+    {
+      "name": "users",
+      "description": "Current user profile with sparse fieldsets"
     }
   ],
   "paths": {
@@ -146,6 +154,56 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "getMe",
+        "summary": "Get current user profile — sparse fieldsets",
+        "description": "Returns the authenticated user's profile (`user_id` always included). Pass `?fields=username,email,avatar_url` to fetch only what you need: `email` comes straight from the validated JWT (zero DB cost), `username`/`avatar_url` are read from `public.profiles` with a column-select limited to the requested fields. Omit `fields` to get everything at once. Unknown field names → 400 `invalid_fields`. Data sources verified on Supabase: `username`+`avatar_url` live in `public.profiles` (e.g. `jack` → `.../storage/v1/object/public/avatars/...`), `email` lives only in `auth.users` so the API serves the JWT `email` claim instead of hitting `auth.*` over PostgREST.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Comma-separated subset of `username,email,avatar_url`. Example: `?fields=username,email`. Omit for the full profile.\n",
+            "schema": {
+              "type": "string",
+              "example": "username,email"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current user profile (only requested fields + user_id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -306,6 +364,104 @@
         }
       }
     },
+    "/billing/checkouts": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "createBillingCheckout",
+        "summary": "Create a Stripe Checkout Session for wallet top-up",
+        "description": "Creates a one-time EUR Checkout Session (`mode: payment`) for the authenticated user. The app opens `checkout_url` in a browser/Desktop webview. Supports preset amounts (5, 20, 100, 200 EUR — matching the existing Stripe prices) or any custom whole-euro amount via `amount_eur`. Conversion is fixed: 1 EUR = 1 credit, credited to `wallets.balance` by the Stripe webhook (`checkout.session.completed`). Pass `success_url`/`cancel_url` to deep-link back into Desktop/michelangelo-app (defaults come from server env).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBillingCheckoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Checkout Session created — open checkout_url",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingCheckout"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/billing/webhooks": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "handleBillingWebhook",
+        "summary": "Stripe webhook — credits wallets on payment",
+        "description": "Stripe calls this endpoint (no auth — verified via `Stripe-Signature` against `STRIPE_WEBHOOK_SECRET`). Handles `checkout.session.completed` with `payment_status: paid`: idempotently inserts a `wallet_transactions` row (`reason: topup`) and increments `wallets.balance` by `credits` (1 EUR = 1 credit). Configure the URL in the Stripe Dashboard; keep the legacy Supabase `stripe-webhook` endpoint until traffic is migrated.\n",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Raw Stripe event payload (verified by signature)"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook received (or ignored for other event types)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "received"
+                  ],
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad signature or malformed payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{projectId}": {
       "get": {
         "tags": [
@@ -421,6 +577,42 @@
                 "format": "date-time"
               }
             }
+          }
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "user_id"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Auth user id (JWT sub, matches public.profiles.id)"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Username from public.profiles (e.g. `jack`)"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email",
+            "description": "Email from the validated JWT (mirrors auth.users.email)"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri",
+            "description": "Public avatar URL from public.profiles.avatar_url (bucket `avatars`)"
           }
         }
       },
@@ -565,6 +757,69 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "CreateBillingCheckoutRequest": {
+        "type": "object",
+        "required": [
+          "amount_eur"
+        ],
+        "properties": {
+          "amount_eur": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "Whole euros to charge (1 EUR = 1 credit). Presets in the app: 5, 20, 100, 200 — any integer 1..1000 accepted for custom amounts. Always charged in EUR.\n",
+            "example": 20
+          },
+          "success_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Deep-link or https URL Stripe redirects to after payment. May contain `{CHECKOUT_SESSION_ID}` placeholder. Defaults to server `BILLING_SUCCESS_URL` when omitted.\n"
+          },
+          "cancel_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL Stripe redirects to on cancel. Defaults to server `BILLING_CANCEL_URL` when omitted.\n"
+          }
+        }
+      },
+      "BillingCheckout": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "checkout_url",
+          "amount_cents",
+          "credits",
+          "currency"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Stripe Checkout Session id (`cs_*`)"
+          },
+          "checkout_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Open this URL in a browser to collect payment"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "description": "Charged amount in euro cents",
+            "example": 2000
+          },
+          "credits": {
+            "type": "integer",
+            "description": "Credits the wallet receives once paid (1 EUR = 1)",
+            "example": 20
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "eur"
+            ],
+            "example": "eur"
           }
         }
       },

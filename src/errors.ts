@@ -3,22 +3,30 @@ export class MichelangeloApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly details?: Record<string, unknown>;
+  /** Seconds from the `Retry-After` header, when the server sent one (429). */
+  readonly retryAfter?: number;
 
   constructor(opts: {
     status: number;
     code: string;
     message: string;
     details?: Record<string, unknown>;
+    retryAfter?: number;
   }) {
     super(opts.message);
     this.name = "MichelangeloApiError";
     this.status = opts.status;
     this.code = opts.code;
     this.details = opts.details;
+    this.retryAfter = opts.retryAfter;
   }
 
   isUnauthorized(): boolean {
     return this.status === 401;
+  }
+
+  isRateLimited(): boolean {
+    return this.status === 429;
   }
 }
 

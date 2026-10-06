@@ -11,9 +11,23 @@ const EXPECTED = {
   apiBaseUrl: "https://api.michelangelo.land/v1",
   authorizationUrl: "https://auth.michelangelo.land/auth/v1/oauth/authorize",
   tokenUrl: "https://auth.michelangelo.land/auth/v1/oauth/token",
-  operations: ["getHealth", "getWhoami", "createJob", "getJob", "listProjects", "getProject"],
-  paths: ["/health", "/openapi.json", "/docs", "/whoami", "/jobs", "/jobs/{jobId}", "/projects", "/projects/{projectId}"],
-  implementedBySdk: ["getHealth", "getWhoami"],
+  operations: [
+    "getHealth", "getOpenApiDocument", "getDocs", "getWhoami", "getMe",
+    "createJob", "getJob", "listProjects", "getProject",
+    "createBillingCheckout", "handleBillingWebhook",
+  ],
+  paths: [
+    "/health", "/openapi.json", "/docs", "/whoami", "/me",
+    "/jobs", "/jobs/{jobId}", "/projects", "/projects/{projectId}",
+    "/billing/checkouts", "/billing/webhooks",
+  ],
+  // Client-covered operations. Deliberately skipped: getOpenApiDocument/getDocs
+  // (meta) and handleBillingWebhook (Stripe-signed server hook, not a client).
+  implementedBySdk: [
+    "getHealth", "getWhoami", "getMe", "createJob", "getJob",
+    "listProjects", "getProject", "createBillingCheckout",
+  ],
+  skippedByDesign: ["getOpenApiDocument", "getDocs", "handleBillingWebhook"],
 };
 
 const failures = [];
@@ -48,15 +62,18 @@ for (const p of EXPECTED.paths) {
   if (!doc.paths?.[p]) failures.push(`path missing from swagger: ${p}`);
 }
 
-// SDK Dors: every method the SDK claims must exist in the swagger.
-const { readFile } = await import("node:fs/promises");
-const clientSrc = await readFile(new URL("../src/client.ts", import.meta.url), "utf8");
+// Every operation the SDK claims must exist in the swagger…
 for (const op of EXPECTED.implementedBySdk) {
   const path = Object.entries(doc.paths ?? {}).find(([, item]) =>
     Object.values(item).some((o) => o.operationId === op),
   )?.[0];
   if (!path) failures.push(`SDK-covered operation vanished from swagger: ${op}`);
-  void clientSrc;
+}
+// …and every swagger operation must be a conscious choice (covered or skipped).
+for (const op of liveOps) {
+  if (!EXPECTED.implementedBySdk.includes(op) && !EXPECTED.skippedByDesign.includes(op)) {
+    failures.push(`swagger operation not tracked by SDK contract: ${op}`);
+  }
 }
 
 if (failures.length > 0) {

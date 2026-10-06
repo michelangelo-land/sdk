@@ -51,7 +51,39 @@ npm run example:node-login
 |---|---|---|
 | `getHealth` `GET /health` | `client.health()` | none (anonymous OK) |
 | `getWhoami` `GET /whoami` | `client.whoami()` | Bearer required |
-| `createJob` / `getJob` / `listProjects` / `getProject` | next iteration (tracked by `npm run contract`) | Bearer required |
+| `getMe` `GET /me` | `client.me(["username", "email"])` (sparse fieldsets) | Bearer required |
+| `createJob` `POST /jobs` | `client.createJob()` → 202 row | Bearer required |
+| `getJob` `GET /jobs/{id}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
+| `listProjects` `GET /projects` | `client.listProjects()` / `client.listAllProjects()` | Bearer required |
+| `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |
+| `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
+
+Not covered on purpose: `getOpenApiDocument`/`getDocs` (meta) and
+`handleBillingWebhook` (Stripe-signed server hook).
+
+```ts
+// Async generation: create, then wait (backoff 2s → 30s, 10 min timeout).
+const job = await client.createJob({ type: "prompt", input: { prompt: "a timer app" } });
+const done = await client.waitForJob(job.id, {
+  onProgress: (j) => console.log(j.status),
+});
+if (done.status !== "succeeded") throw new Error(done.error?.message ?? done.status);
+
+// Community feed: every page, one array.
+const projects = await client.listAllProjects({ visibility: "all" });
+
+// Top-up: 1 EUR = 1 credit, crediting happens in the webhook once paid.
+const co = await client.createBillingCheckout({ amount_eur: 20 });
+openBrowser(co.checkout_url);
+```
+
+## Token expiry
+
+Calls that fail with 401 refresh the access token from the in-memory
+refresh token and retry once (disable with `new MichelangeloClient({
+autoRefresh: false })`). If the refresh fails too, the SDK drops to
+anonymous and the 401 surfaces — call `loginWithLoopback()` (or the browser
+flow) again.
 
 ## Expo / React Native (Hermes)
 
