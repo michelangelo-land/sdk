@@ -56,6 +56,7 @@ npm run example:node-login
 | users | `updateMe` `PATCH /me` | `client.updateMe({ username })` | Bearer required |
 | users | `deleteMe` `DELETE /me` | `client.deleteMe()` → void (204) | Bearer required |
 | users | `uploadMyAvatar` `POST /me/avatar` (multipart `file`) | `client.uploadMyAvatar(fileOrFormData)` → `{ avatar_url }` | Bearer required |
+| users | `getPublicProfile` `GET /users/{userId}` | `client.getPublicProfile(userId)` → `{ id, username, avatar_url, is_supporter, … }` | Bearer required |
 | jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay) | Bearer required |
 | jobs | `uploadJobAttachments` `POST /jobs/attachments` (multipart, ≤3 images) | `client.uploadJobAttachments({ files, idempotencyKey })` or `FormData` | Bearer required |
 | jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
@@ -114,6 +115,19 @@ const push = await client.createJob({ type: "github-push", project_id: 12 });
 // Prompt with images: upload first, then attach the manifest.
 const manifest = await client.uploadJobAttachments({ files: [imageBlob] });
 await client.createJob({ type: "prompt", input: { prompt: "redesign this" }, attachments: manifest.attachments });
+
+// Prompt with Live Activity + linked Supabase ref (folded into `input` server-side):
+await client.createJob({
+  type: "prompt",
+  input: { prompt: "add auth" },
+  live_activity_token,
+  live_activity_user,
+  supabase_project_ref: "abcxyz",
+});
+
+// Author of a project (explore feed shows the `author` embed; `user_id` for the full hero):
+const author = project.author; // { username, avatar_url } | null
+const hero = await client.getPublicProfile(project.user_id!);
 
 // Community feed: every page, one array.
 const projects = await client.listAllProjects({ visibility: "all" });

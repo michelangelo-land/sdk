@@ -391,6 +391,53 @@
         }
       }
     },
+    "/users/{userId}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "getPublicProfile",
+        "summary": "Public profile by id (mirrors screens/user feed hero)",
+        "description": "Selects `id,username,avatar_url,is_supporter,created_at,updated_at` from `public.profiles` — the exact column set `screens/user/index.tsx` reads. RLS `Profiles are viewable by everyone`, so any authenticated caller can read any profile (needed by explore feed, preview and user screens). Pairs with the `author` embed on Project.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/jobs": {
       "post": {
         "tags": [
@@ -398,7 +445,7 @@
         ],
         "operationId": "createJob",
         "summary": "Create an async job",
-        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt` (existing): `input.prompt` is evaluated server-side (invalid → 400, quota → 429). Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and `expo_push_token` (stored in `input`, used for completion push). `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n`type=github-push` (new): needs `project_id` of a GitHub-linked project. Creates the row, synchronously invokes the `github-actions` push (Snack bundle → GitHub), then writes `succeeded`/`failed` with `{pushed,commitSha}` into the row. Requires the `github-push` value in the `jobs_type_check` constraint (migration `widen_jobs_type_github_push`).\n",
+        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt` (existing): `input.prompt` is evaluated server-side (invalid → 400, quota → 429). Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and         `expo_push_token` (stored in `input`, used for completion push). Top-level `live_activity_token`, `live_activity_user` and `supabase_project_ref` are folded into `input` the same way (top-level wins on conflict with `input` keys); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n`type=github-push` (new): needs `project_id` of a GitHub-linked project. Creates the row, synchronously invokes the `github-actions` push (Snack bundle → GitHub), then writes `succeeded`/`failed` with `{pushed,commitSha}` into the row. Requires the `github-push` value in the `jobs_type_check` constraint (migration `widen_jobs_type_github_push`).\n",
         "security": [
           {
             "oauth2": []
@@ -3223,6 +3270,18 @@
             "type": "string",
             "description": "Expo push token notified on completion (stored in input, mirrors sendPrompt)"
           },
+          "live_activity_token": {
+            "type": "string",
+            "description": "Live Activity push token (stored in input.live_activity_token, mirrors v9 enqueue)"
+          },
+          "live_activity_user": {
+            "type": "string",
+            "description": "Live Activity user id (stored in input.live_activity_user, mirrors v9 enqueue)"
+          },
+          "supabase_project_ref": {
+            "type": "string",
+            "description": "Linked Supabase ref for the runner (stored in input.supabase_project_ref, mirrors v9 enqueue)"
+          },
           "idempotency_key": {
             "type": "string",
             "format": "uuid",
@@ -3519,9 +3578,80 @@
           "name": {
             "type": "string"
           },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owner id (needed by feed/user screens to fetch the author profile)"
+          },
+          "shared": {
+            "type": "boolean",
+            "description": "Community visibility (preview/feed only show shared projects)"
+          },
           "icon_url": {
             "type": "string",
             "format": "uri"
+          },
+          "author": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Embedded author profile (username, avatar_url) via projects_user_id_fkey",
+            "properties": {
+              "username": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "avatar_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uri"
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PublicProfile": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "description": "Public profile columns read by screens/user (feed hero)",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "is_supporter": {
+            "type": "boolean"
           },
           "created_at": {
             "type": "string",

@@ -66,6 +66,20 @@ describe("users (new)", () => {
     const out = await authed(fetchFn).uploadMyAvatar(form);
     assert.equal(out.avatar_url, "https://cdn/y.png");
   });
+
+  it("getPublicProfile GETs /users/{userId}", async () => {
+    const userId = "00000000-0000-4000-8000-000000000001";
+    let seenUrl = "";
+    const fetchFn = stubFetch((url, init) => {
+      seenUrl = String(url);
+      assert.equal(init?.method ?? "GET", "GET");
+      return json({ id: userId, username: "jack", avatar_url: null, is_supporter: false });
+    });
+    const out = await authed(fetchFn).getPublicProfile(userId);
+    assert.equal(out.id, userId);
+    assert.equal(out.username, "jack");
+    assert.ok(seenUrl.endsWith(`/v1/users/${userId}`), seenUrl);
+  });
 });
 
 describe("jobs (new)", () => {

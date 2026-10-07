@@ -47,6 +47,7 @@ import type {
   Project,
   ProjectFilesPage,
   ProjectPage,
+  PublicProfile,
   RegisterPushTokenRequest,
   RegisterPushTokenResponse,
   RemovePushTokenRequest,
@@ -271,6 +272,16 @@ export class MichelangeloClient {
       method: "POST",
       formData: toAvatarFormData(file),
     });
+  }
+
+  /**
+   * `GET /users/{userId}` — public profile by id (`id, username, avatar_url,
+   * is_supporter, created_at, updated_at`). Any authenticated caller can read
+   * any profile (explore feed / preview / user screens). Pairs with the
+   * `author` embed on `Project`.
+   */
+  getPublicProfile(userId: string): Promise<PublicProfile> {
+    return this.request<PublicProfile>(`/users/${encodeURIComponent(userId)}`);
   }
 
   /**

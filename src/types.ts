@@ -59,6 +59,12 @@ export interface CreatePromptJobRequest {
   attachments?: JobAttachmentRef[];
   /** Expo push token notified on completion (stored in input). */
   expo_push_token?: string;
+  /** Live Activity push token (stored in `input.live_activity_token`). */
+  live_activity_token?: string;
+  /** Live Activity user id (stored in `input.live_activity_user`). */
+  live_activity_user?: string;
+  /** Linked Supabase ref for the runner (stored in `input.supabase_project_ref`). */
+  supabase_project_ref?: string;
   /** Client-generated uuid; replay with the same key returns the existing job. */
   idempotency_key?: string;
 }
@@ -110,9 +116,21 @@ export type ProjectVisibility = "mine" | "all";
 export interface Project {
   id: number;
   name: string;
+  /** Owner id (needed by feed/user screens to fetch the author profile). */
+  user_id?: string | null;
+  /** Community visibility (preview/feed only show shared projects). */
+  shared?: boolean;
   icon_url?: string;
+  /** Embedded author profile (username, avatar_url) via `projects_user_id_fkey`. */
+  author?: ProjectAuthor | null;
   created_at: string;
   updated_at?: string;
+}
+
+/** `author` embed on `Project` — `{ username, avatar_url }`. */
+export interface ProjectAuthor {
+  username?: string | null;
+  avatar_url?: string | null;
 }
 
 export interface ProjectPage {
@@ -413,7 +431,7 @@ export interface GetUsageInsightsOptions {
   timezone?: string;
 }
 
-// --- users → `getMe`/`updateMe`/`deleteMe`/`uploadMyAvatar`, schema `Me` (sparse fieldsets) ---
+// --- users → `getMe`/`updateMe`/`deleteMe`/`uploadMyAvatar`/`getPublicProfile`, schema `Me` (sparse fieldsets) ---
 
 export type MeField = "username" | "email" | "avatar_url";
 
@@ -431,6 +449,18 @@ export interface UpdateMeRequest {
 
 export interface AvatarUploadResponse {
   avatar_url: string;
+}
+
+// --- `GET /users/{userId}` → operationId `getPublicProfile`, schema `#/components/schemas/PublicProfile` ---
+
+/** Public profile columns read by `screens/user` (feed hero). */
+export interface PublicProfile {
+  id: string;
+  username?: string | null;
+  avatar_url?: string | null;
+  is_supporter?: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 // --- notifications → `listNotifications`/`getUnreadCount`/`markNotificationRead`/`markAllNotificationsRead` + push tokens ---

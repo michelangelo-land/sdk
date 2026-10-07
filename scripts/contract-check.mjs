@@ -13,7 +13,7 @@ const EXPECTED = {
   tokenUrl: "https://auth.michelangelo.land/auth/v1/oauth/token",
   operations: [
     "getHealth", "getOpenApiDocument", "getDocs", "getWhoami", "getMe",
-    "updateMe", "deleteMe", "uploadMyAvatar", "createJob", "uploadJobAttachments",
+    "updateMe", "deleteMe", "uploadMyAvatar", "getPublicProfile", "createJob", "uploadJobAttachments",
     "getJob", "listProjects", "createProject", "createBillingCheckout",
     "handleBillingWebhook", "getProject", "updateProject", "deleteProject",
     "listProjectFiles", "saveProjectFiles", "generateProjectIcon", "reshareProject",
@@ -26,7 +26,7 @@ const EXPECTED = {
     "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
   ],
   paths: [
-    "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar",
+    "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar", "/users/{userId}",
     "/jobs", "/jobs/attachments", "/jobs/{jobId}", "/projects",
     "/billing/checkouts", "/billing/webhooks", "/projects/{projectId}",
     "/projects/{projectId}/files", "/projects/{projectId}/icon",
@@ -43,6 +43,7 @@ const EXPECTED = {
   // (meta) and handleBillingWebhook/handleGithubWebhook (signed server hooks).
   implementedBySdk: [
     "getHealth", "getWhoami", "getMe", "updateMe", "deleteMe", "uploadMyAvatar",
+    "getPublicProfile",
     "createJob", "uploadJobAttachments", "getJob", "listProjects", "createProject",
     "getProject", "updateProject", "deleteProject", "listProjectFiles", "saveProjectFiles",
     "generateProjectIcon", "reshareProject", "listPreviewErrors", "getProjectSupabaseLink",
