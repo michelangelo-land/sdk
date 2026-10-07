@@ -3,11 +3,26 @@
   "version": "0.3.0",
   "private": false,
   "type": "module",
-  "description": "Official Michelangelo SDK — dynamic OAuth 2.1 + PKCE auth with in-memory tokens, typed client generated from the OpenAPI contract (api.michelangelo.land/v1/openapi.json).",
+  "description": "Official Michelangelo Land SDK — dynamic OAuth 2.1 + PKCE auth with in-memory tokens, typed client generated from the OpenAPI contract (api.michelangelo.land/v1/openapi.json).",
   "license": "MIT",
+  "author": "Michelangelo Land <sardo@michelangelo.land>",
+  "homepage": "https://docs.michelangelo.land",
+  "bugs": {
+    "url": "https://github.com/michelangelo-land/sdk/issues"
+  },
+  "keywords": [
+    "typescript",
+    "sdk",
+    "oauth2",
+    "pkce",
+    "openapi",
+    "api-client",
+    "fetch",
+    "michelangelo-land"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/michelangelo-land/sdk.git"
+    "url": "git+https://github.com/michelangelo-land/sdk.git"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
