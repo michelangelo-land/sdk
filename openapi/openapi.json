@@ -36,16 +36,44 @@
       "description": "Machine-readable contract and interactive reference"
     },
     {
+      "name": "explore",
+      "description": "Community discover feed (public/shared projects)"
+    },
+    {
+      "name": "github",
+      "description": "GitHub App installs, linked repos and inbound webhooks"
+    },
+    {
+      "name": "integrations",
+      "description": "Supabase-account OAuth and project links"
+    },
+    {
       "name": "jobs",
       "description": "Async long-running operations (prompts, builds, AI runs)"
+    },
+    {
+      "name": "moderation",
+      "description": "Reports and blocks (community safety)"
+    },
+    {
+      "name": "notifications",
+      "description": "In-app notifications and Expo push tokens"
     },
     {
       "name": "projects",
       "description": "Michelangelo projects owned by the authenticated user"
     },
     {
+      "name": "usage",
+      "description": "Consumption summaries backed by usage_events RPCs"
+    },
+    {
       "name": "users",
       "description": "Current user profile with sparse fieldsets"
+    },
+    {
+      "name": "wallets",
+      "description": "Credit balance and transaction history"
     }
   ],
   "paths": {
@@ -206,16 +234,14 @@
             "$ref": "#/components/responses/NotFound"
           }
         }
-      }
-    },
-    "/jobs": {
-      "post": {
+      },
+      "patch": {
         "tags": [
-          "jobs"
+          "users"
         ],
-        "operationId": "createJob",
-        "summary": "Create an async job",
-        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n",
+        "operationId": "updateMe",
+        "summary": "Update current user profile (username, avatar_url)",
+        "description": "Updates `public.profiles` as the user (RLS `Users can update own profile`). Accepts `username` (3..30 chars, `^[a-z0-9][a-z0-9_.]{1,28}[a-z0-9]$`) and/or `avatar_url` (public URL or null to remove). Mirrors `src/screens/settings/edit-username.tsx` + `edit-profile.tsx` in michelangelo-app. Duplicate username → 409 `username_taken`.\n",
         "security": [
           {
             "oauth2": []
@@ -229,12 +255,189 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateJobRequest"
+                "$ref": "#/components/schemas/UpdateMeRequest"
               }
             }
           }
         },
         "responses": {
+          "200": {
+            "description": "Updated profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Username already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "deleteMe",
+        "summary": "Delete account and data (proxies delete-account edge)",
+        "description": "Proxies the Supabase `delete-account` edge function with the user JWT (no body). The edge removes files, notifications, github links, avatar objects, then `auth.admin.deleteUser` (cascades profiles, projects, usage_events, subscriptions, reshares, reports, blocks).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Account deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "502": {
+            "description": "Upstream delete failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/avatar": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "uploadMyAvatar",
+        "summary": "Upload avatar file (multipart) → public URL",
+        "description": "Accepts `multipart/form-data` with a single `file` field (png/jpeg/webp, max 5MB — same limits as `edit-profile.tsx:uploadImage`). Uploads to the public `avatars` bucket at `{user_id}/avatar_{ts}.{ext}` via service role, then updates `profiles.avatar_url` with the public URL. Returns the URL.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Avatar uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "avatar_url"
+                  ],
+                  "properties": {
+                    "avatar_url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "createJob",
+        "summary": "Create an async job",
+        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt` (existing): `input.prompt` is evaluated server-side (invalid → 400, quota → 429). Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and `expo_push_token` (stored in `input`, used for completion push). `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n`type=github-push` (new): needs `project_id` of a GitHub-linked project. Creates the row, synchronously invokes the `github-actions` push (Snack bundle → GitHub), then writes `succeeded`/`failed` with `{pushed,commitSha}` into the row. Requires the `github-push` value in the `jobs_type_check` constraint (migration `widen_jobs_type_github_push`).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CreatePromptJobRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateGithubPushJobRequest"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "type"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent replay — existing job for idempotency_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
           "202": {
             "description": "Job accepted and queued",
             "content": {
@@ -251,8 +454,78 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "description": "Project not found (github-push) — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/jobs/attachments": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "uploadJobAttachments",
+        "summary": "Upload prompt images (multipart) → manifest",
+        "description": "Accepts `multipart/form-data` with up to 3 image files (png/jpeg/webp, max 5MB each — same limits as `uploadPromptAttachments` in michelangelo-app). Optional text field `idempotency_key` (uuid, generated server-side when omitted). Uploads each to the private `job-attachments` bucket at `{user_id}/{idempotency_key}/image-{i}.{ext}` and returns the manifest to pass as `attachments` in `POST /v1/jobs` (`type=prompt`). Files stay in the transient bucket until the runner downloads and deletes them.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "files": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Manifest of stored attachments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentsManifest"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -357,6 +630,49 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "createProject",
+        "summary": "Create a project (insert public.projects)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -506,6 +822,1620 @@
             "$ref": "#/components/responses/NotFound"
           }
         }
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "updateProject",
+        "summary": "Rename / share / set icon (update public.projects)",
+        "description": "Mirrors `useRenameProject` (`{name}`) + `useToggleVisibility` (`{shared}`) in michelangelo-app. At least one of `name,shared,icon_url` required. RLS: only the owner can update.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "deleteProject",
+        "summary": "Delete a project (mirrors useDeleteProject)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/files": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listProjectFiles",
+        "summary": "List files of a project (+ updated_at)",
+        "description": "Selects `public.files` (`path,contents,type,updated_at`) ordered by path. Mirrors `use-project-files.ts` (which filters `type=CODE` client-side; pass `?type=CODE` for the same view). RLS: owner or shared project.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "example": "CODE"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Files of the project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProjectFile"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "saveProjectFiles",
+        "summary": "Save files (per-file update-then-insert upsert)",
+        "description": "Body `{files:[{path,contents,type}]}`. Per file: `PATCH ?project_id=eq.X&path=eq.Y`, if zero rows then `POST`. Same result as `use-project-files.ts` save (which issues one update per file).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveFilesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProjectFile"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/icon": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "generateProjectIcon",
+        "summary": "Generate + assign icon (proxies generate-project-icon edge)",
+        "description": "Proxies the Supabase `generate-project-icon` edge (`{project_id}`) with the user JWT. The edge reads `get_project_for_icon`, uploads `project-icons/{id}/{ts}.png`, then `update_project_icon`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Icon generation accepted (edge result proxied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/reshare": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "reshareProject",
+        "summary": "Republish / share (insert project_reshares)",
+        "description": "Mirrors `use-reshare.ts`: inserts `{project_id,reshared_by_user_id,platform,share_metadata}`. Duplicate (same project+user+platform) → 200 with `deduped:true` instead of an error.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReshareRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Reshare recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/preview-errors": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listPreviewErrors",
+        "summary": "Preview errors (select preview_errors)",
+        "description": "Mirrors `use-preview-errors.ts` drain: selects `id,message,stack,created_at` for the project (max 10, oldest first). Pure by default; pass `?consume=true` to also delete the returned rows (what the app does after rendering them). RLS: project owner only.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "consume",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preview errors of the project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PreviewError"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/supabase-link": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "getProjectSupabaseLink",
+        "summary": "Supabase link of one project (safe columns only)",
+        "description": "Selects `project_id,supabase_project_ref,supabase_project_name,api_url` from `supabase_project_links`. Mirrors the app read (never `anon_key` over this route). 404 when the project has no link.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupabaseProjectLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/explore/projects": {
+      "get": {
+        "tags": [
+          "explore"
+        ],
+        "operationId": "listExploreProjects",
+        "summary": "Discover feed (cursor over shared projects)",
+        "description": "Community feed: `shared=true` projects ordered by `updated_at` desc with cursor pagination (`?limit&cursor`). Mirrors `ProjectsProvider type='all'` (which pages 3 at a time). Optional `?q=` runs RPC `match_project` first and returns the matched project(s). `get_explore_projects` does not exist on the DB, so the feed is a filtered projects select (RLS `own OR shared`).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Full-text query via RPC match_project",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of public projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/reports": {
+      "post": {
+        "tags": [
+          "moderation"
+        ],
+        "operationId": "createReport",
+        "summary": "Report content (insert reports)",
+        "description": "Mirrors `utils/project.ts:reportAlert`: inserts `{reporter_id,reported_project_id?,reported_user_id?,reason?}`. At least one target required. RLS `users can create reports`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Report recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/blocks": {
+      "post": {
+        "tags": [
+          "moderation"
+        ],
+        "operationId": "blockUser",
+        "summary": "Block a user (insert blocked_users)",
+        "description": "Mirrors `reportAlert` block path: inserts `{blocker_id,blocked_id}`. Duplicate → 200 `deduped:true`. Cannot block yourself → 400.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBlockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/token": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "exchangeGithubToken",
+        "summary": "OAuth code → token (secret never leaves the server)",
+        "description": "Proxies the Supabase `github-token-exchange` edge with the user JWT: `{code,redirect_uri?}` → `{access_token}`. The GitHub client secret stays in edge secrets, never ships to the app. Mirrors `getGitHubToken` in michelangelo-app.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "redirect_uri": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "GitHub user access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "access_token"
+                  ],
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/installations": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "listGithubInstallations",
+        "summary": "GitHub App installations of the user (safe columns only)",
+        "description": "Selects `id,login,avatar,name` from `github_installations` for the caller. Never exposes `ghu` (the stored OAuth token). Mirrors the installation picker in `components/github.tsx`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Installations of the user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GithubInstallation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/repositories": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "listGithubRepositories",
+        "summary": "Repos linked by the user (via their installations)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Linked repositories of the user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GithubRepository"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "linkGithubRepository",
+        "summary": "Save selected repo (upsert github_repositories)",
+        "description": "Mirrors the link step in `use-github-mutations.ts`: verifies the installation belongs to the caller, then upserts `{project_id,github_installation_id,github_repository_name,github_last_sync}` on conflict `project_id`. Defaults `github_repository_name` to `michelangelo-{project_id}` (app convention) when omitted.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkGithubRepositoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Repository linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubRepository"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Project or installation not found — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/github/webhooks": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "handleGithubWebhook",
+        "summary": "GitHub events (HMAC verified, no JWT — proxies github-webhook edge)",
+        "description": "GitHub calls this endpoint (no auth — verified via `X-Hub-Signature-256` HMAC-SHA256 against `GITHUB_WEBHOOK_SECRET`, then forwarded to the Supabase `github-webhook` edge, which refreshes `github_installations` profile fields on `installation.created` and deletes the row on `installation.deleted`). Configure the URL in the GitHub App settings.\n",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Raw GitHub event payload (signature verified)"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook received",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "received"
+                  ],
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad signature or malformed payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/supabase/login": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "startSupabaseOAuth",
+        "summary": "Start Supabase-account OAuth (proxies connect-supabase/login)",
+        "description": "Proxies `GET connect-supabase/login` with the caller id from the JWT (`user_id`) plus the app PKCE `code_challenge`/`code_verifier?`. Returns `{authorize_url,return_url}` — the app opens `authorize_url` via `openAuthSessionAsync` and the edge deep-links back to `michelangelo://supabase-connected` after the callback stores the connection (tokens stay server-side in `supabase_connections`).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code_challenge"
+                ],
+                "properties": {
+                  "code_challenge": {
+                    "type": "string"
+                  },
+                  "code_verifier": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OAuth authorize URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "authorize_url",
+                    "return_url"
+                  ],
+                  "properties": {
+                    "authorize_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "return_url": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/integrations/supabase/projects": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "listSupabaseProjects",
+        "summary": "User's Supabase projects (proxies connect-supabase/projects)",
+        "description": "Proxies `GET connect-supabase/projects` with the user JWT (the edge refreshes the OAuth token as needed). Returns `{projects:[{ref,name,region,created_at,linked_project_id}],organizations}`. 404 `not_connected` when the Supabase account is not linked.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Supabase projects of the user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Supabase account not connected — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/supabase/links": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "linkSupabaseProject",
+        "summary": "Link app ↔ Supabase ref (proxies connect-supabase/link)",
+        "description": "Proxies `POST connect-supabase/link` (`{project_id,supabase_ref}`) with the user JWT. The edge verifies project ownership, Supabase-account ownership, 1:1 uniqueness (409 `already_linked`) and fetches the anon key server-side, then upserts `supabase_project_links`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkSupabaseProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Project not found or Supabase not connected — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Supabase project already backs another app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/supabase/connection": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "getSupabaseConnection",
+        "summary": "Connection state (safe columns of supabase_connections)",
+        "description": "Selects `supabase_user_id,supabase_username` for the caller (never the OAuth tokens). `{connected:false}` when no row exists. Mirrors `use-supabase-connection.ts`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupabaseConnection"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/wallets/me": {
+      "get": {
+        "tags": [
+          "wallets"
+        ],
+        "operationId": "getMyWallet",
+        "summary": "Balance + bonus (select wallets)",
+        "description": "Mirrors `use-credit-balance.ts:fetchCreditBalance` wallet leg: selects `balance,bonus_balance,bonus_expires_at` for the caller. Expired bonus is reported as 0 bonus (same rule as RPC `get_wallet_balance`).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wallet snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Wallet"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/wallets/me/transactions": {
+      "get": {
+        "tags": [
+          "wallets"
+        ],
+        "operationId": "listMyTransactions",
+        "summary": "Top-up/spend history (select wallet_transactions)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "ISO timestamp cursor over created_at",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WalletTransaction"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/usage/summary": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "operationId": "getUsageSummary",
+        "summary": "Consumption summary (RPC get_usage_summary)",
+        "description": "Proxies RPC `get_usage_summary(p_period,p_year,p_month)` as the user (`auth.uid()` inside). Mirrors `context/usage.tsx` (`month` + `all`).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "month",
+                "week",
+                "all"
+              ],
+              "default": "month"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage summary row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/usage/contributions": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "operationId": "getUsageContributions",
+        "summary": "Daily contributions (RPC get_usage_contributions)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daily run/token counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UsageContribution"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/usage/insights": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "operationId": "getUsageInsights",
+        "summary": "Insights (RPC get_usage_insights)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "timezone",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "UTC"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Insight row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageInsights"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "listNotifications",
+        "summary": "List notifications (cursor, mirrors push-notifications.tsx)",
+        "description": "Selects `notifications` for the caller ordered by `created_at` desc (limit 50 max client-side; API default 20). Includes `sender{username,avatar_url}` expansion.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "ISO timestamp cursor over created_at",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Notification"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/notifications/unread-count": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "getUnreadCount",
+        "summary": "Badge count (RPC get_unread_notifications_count)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unread badge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "unread_count"
+                  ],
+                  "properties": {
+                    "unread_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/notifications/{notificationId}": {
+      "patch": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "markNotificationRead",
+        "summary": "Mark read (update notifications)",
+        "description": "Mirrors single-read (`update{is_read:true}.eq(id).eq(recipient_id)`) in `push-notifications.tsx`. Body `{is_read:true}` (only true supported — unread is a fresh row, not a toggle).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "notificationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "is_read"
+                ],
+                "properties": {
+                  "is_read": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated notification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/push-tokens": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "registerPushToken",
+        "summary": "Register Expo token (upsert expo_push_tokens)",
+        "description": "Mirrors `savePushToken`/`savePushTokenToDB`: upserts `{user_id,token,device_type?,is_active:true,last_used_at,locale?,time_zone?}` on conflict `token`. RLS `Users can manage own push tokens`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPushTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Token registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "removePushToken",
+        "summary": "Remove token (body {token}, mirrors logout path)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Token removed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
       }
     }
   },
@@ -616,7 +2546,371 @@
           }
         }
       },
+      "UpdateMeRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 30,
+            "pattern": "^[a-z0-9][a-z0-9_.]{1,28}[a-z0-9]$"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "shared": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "shared": {
+            "type": "boolean"
+          },
+          "icon_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        }
+      },
+      "ProjectFile": {
+        "type": "object",
+        "required": [
+          "path",
+          "contents"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "contents": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "example": "CODE"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SaveFilesRequest": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "contents"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contents": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "default": "CODE"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ReshareRequest": {
+        "type": "object",
+        "required": [
+          "platform"
+        ],
+        "properties": {
+          "platform": {
+            "type": "string",
+            "minLength": 1
+          },
+          "share_metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CreateReportRequest": {
+        "type": "object",
+        "properties": {
+          "reported_project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reported_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateBlockRequest": {
+        "type": "object",
+        "required": [
+          "blocked_id"
+        ],
+        "properties": {
+          "blocked_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "Wallet": {
+        "type": "object",
+        "required": [
+          "balance",
+          "bonus_balance",
+          "total"
+        ],
+        "properties": {
+          "balance": {
+            "type": "integer"
+          },
+          "bonus_balance": {
+            "type": "integer"
+          },
+          "bonus_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "WalletTransaction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "delta": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "bonus",
+              "topup",
+              "spend",
+              "refund",
+              "migration",
+              "adjustment"
+            ]
+          },
+          "credits": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "product_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UsageSummary": {
+        "type": "object",
+        "properties": {
+          "period_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "run_count": {
+            "type": "integer"
+          },
+          "generation_count": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "type": "integer"
+          },
+          "cache_creation_tokens": {
+            "type": "integer"
+          },
+          "has_usage_data": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UsageContribution": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date"
+          },
+          "run_count": {
+            "type": "integer"
+          },
+          "total_tokens": {
+            "type": "integer"
+          }
+        }
+      },
+      "UsageInsights": {
+        "type": "object",
+        "properties": {
+          "lines_of_code": {
+            "type": "integer"
+          },
+          "files_count": {
+            "type": "integer"
+          },
+          "current_streak": {
+            "type": "integer"
+          },
+          "best_streak": {
+            "type": "integer"
+          },
+          "best_month": {
+            "type": "string"
+          },
+          "best_month_apps": {
+            "type": "integer"
+          },
+          "peak_hour": {
+            "type": "integer"
+          }
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "is_read": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sender": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "RegisterPushTokenRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1
+          },
+          "device_type": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ]
+          },
+          "locale": {
+            "type": "string"
+          },
+          "time_zone": {
+            "type": "string"
+          }
+        }
+      },
       "CreateJobRequest": {
+        "deprecated": true,
+        "description": "Use CreatePromptJobRequest / CreateGithubPushJobRequest (oneOf on POST /jobs).",
         "type": "object",
         "required": [
           "type",
@@ -659,6 +2953,288 @@
                 "description": "Generated app name (first generation only); server-enriched when absent"
               }
             }
+          }
+        }
+      },
+      "JobAttachmentRef": {
+        "type": "object",
+        "required": [
+          "path",
+          "mime",
+          "size_bytes"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Storage path in the job-attachments bucket (from POST /jobs/attachments)"
+          },
+          "mime": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "default": "image"
+          }
+        }
+      },
+      "CreatePromptJobRequest": {
+        "type": "object",
+        "required": [
+          "type",
+          "input"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "prompt"
+            ]
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric project id (matches public.projects.id)"
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "prompt"
+            ],
+            "properties": {
+              "prompt": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string",
+                "enum": [
+                  "light",
+                  "full"
+                ]
+              },
+              "appName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 3,
+            "description": "Manifest entries from POST /jobs/attachments (stored in job_attachments + input.attachment_refs)",
+            "items": {
+              "$ref": "#/components/schemas/JobAttachmentRef"
+            }
+          },
+          "expo_push_token": {
+            "type": "string",
+            "description": "Expo push token notified on completion (stored in input, mirrors sendPrompt)"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client-generated v4 uuid (mirrors prompt idempotency); replay returns the existing job"
+          }
+        }
+      },
+      "CreateGithubPushJobRequest": {
+        "type": "object",
+        "required": [
+          "type",
+          "project_id"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "github-push"
+            ],
+            "description": "Push the project to its linked GitHub repo via the github-actions edge"
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AttachmentsManifest": {
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "attachments"
+        ],
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobAttachmentRef"
+            }
+          }
+        }
+      },
+      "PreviewError": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": "string"
+          },
+          "stack": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GithubInstallation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GithubRepository": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_installation_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_repository_name": {
+            "type": "string"
+          },
+          "github_last_sync": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LinkGithubRepositoryRequest": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "github_installation_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_installation_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_repository_name": {
+            "type": "string",
+            "description": "Defaults to michelangelo-{project_id} (app convention)"
+          }
+        }
+      },
+      "SupabaseProjectLink": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "supabase_project_ref": {
+            "type": "string"
+          },
+          "supabase_project_name": {
+            "type": "string"
+          },
+          "api_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "LinkSupabaseProjectRequest": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "supabase_ref"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "supabase_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "SupabaseConnection": {
+        "type": "object",
+        "required": [
+          "connected"
+        ],
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "supabase_user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supabase_username": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

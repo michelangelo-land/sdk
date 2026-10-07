@@ -2,8 +2,9 @@
 
 Official Michelangelo SDK (TypeScript, zero runtime dependencies).
 
-Meeting point with the API: **the swagger** — [`GET /v1/openapi.json`](https://api.michelangelo.land/v1/openapi.json) (source file: `Desktop/api/openapi/v1.yaml`).
+Meeting point with the API: **the swagger** — [`GET /v1/openapi.json`](https://api.michelangelo.land/v1/openapi.json) (vendored at `openapi/openapi.json`).
 `src/config.ts`, `src/types.ts` and `src/client.ts` track it; `npm run contract` fails if they drift.
+Interactive reference: [`GET /v1/docs`](https://api.michelangelo.land/v1/docs) (Scalar).
 
 ## Dynamic auth
 
@@ -47,19 +48,53 @@ npm run example:node-login
 
 ## Endpoints (swagger → SDK)
 
-| Swagger (`operationId`) | SDK | Auth |
-|---|---|---|
-| `getHealth` `GET /health` | `client.health()` | none (anonymous OK) |
-| `getWhoami` `GET /whoami` | `client.whoami()` | Bearer required |
-| `getMe` `GET /me` | `client.me(["username", "email"])` (sparse fieldsets) | Bearer required |
-| `createJob` `POST /jobs` | `client.createJob()` → 202 row | Bearer required |
-| `getJob` `GET /jobs/{id}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
-| `listProjects` `GET /projects` | `client.listProjects()` / `client.listAllProjects()` | Bearer required |
-| `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |
-| `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
+| Tag | Swagger (`operationId`) | SDK | Auth |
+|---|---|---|---|
+| auth | `getHealth` `GET /health` | `client.health()` | none (anonymous OK) |
+| auth | `getWhoami` `GET /whoami` | `client.whoami()` | Bearer required |
+| users | `getMe` `GET /me` | `client.me(["username", "email"])` (sparse fieldsets) | Bearer required |
+| users | `updateMe` `PATCH /me` | `client.updateMe({ username })` | Bearer required |
+| users | `deleteMe` `DELETE /me` | `client.deleteMe()` → void (204) | Bearer required |
+| users | `uploadMyAvatar` `POST /me/avatar` (multipart `file`) | `client.uploadMyAvatar(fileOrFormData)` → `{ avatar_url }` | Bearer required |
+| jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay) | Bearer required |
+| jobs | `uploadJobAttachments` `POST /jobs/attachments` (multipart, ≤3 images) | `client.uploadJobAttachments({ files, idempotencyKey })` or `FormData` | Bearer required |
+| jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
+| projects | `listProjects` `GET /projects` | `client.listProjects()` / `client.listAllProjects()` | Bearer required |
+| projects | `createProject` `POST /projects` | `client.createProject({ name })` → 201 | Bearer required |
+| projects | `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |
+| projects | `updateProject` `PATCH /projects/{id}` | `client.updateProject(id, { name, shared, icon_url })` | Bearer required |
+| projects | `deleteProject` `DELETE /projects/{id}` | `client.deleteProject()` → void (204) | Bearer required |
+| projects | `listProjectFiles` `GET /projects/{id}/files` | `client.listProjectFiles(id, { type: "CODE" })` | Bearer required |
+| projects | `saveProjectFiles` `PUT /projects/{id}/files` | `client.saveProjectFiles(id, { files })` | Bearer required |
+| projects | `generateProjectIcon` `POST /projects/{id}/icon` | `client.generateProjectIcon()` | Bearer required |
+| projects | `reshareProject` `POST /projects/{id}/reshare` | `client.reshareProject(id, { platform })` | Bearer required |
+| projects | `listPreviewErrors` `GET /projects/{id}/preview-errors` | `client.listPreviewErrors(id, { consume })` | Bearer required |
+| projects | `getProjectSupabaseLink` `GET /projects/{id}/supabase-link` | `client.getProjectSupabaseLink()` | Bearer required |
+| explore | `listExploreProjects` `GET /explore/projects` | `client.listExploreProjects({ q })` / `client.listAllExploreProjects()` | Bearer required |
+| moderation | `createReport` `POST /reports` | `client.createReport()` → 201 | Bearer required |
+| moderation | `blockUser` `POST /blocks` | `client.blockUser({ blocked_id })` | Bearer required |
+| github | `exchangeGithubToken` `POST /github/token` | `client.exchangeGithubToken({ code })` | Bearer required |
+| github | `listGithubInstallations` `GET /github/installations` | `client.listGithubInstallations()` | Bearer required |
+| github | `listGithubRepositories` / `linkGithubRepository` | `client.listGithubRepositories()` / `client.linkGithubRepository()` | Bearer required |
+| integrations | `startSupabaseOAuth` `POST /integrations/supabase/login` | `client.startSupabaseOAuth({ code_challenge })` → open `authorize_url` | Bearer required |
+| integrations | `listSupabaseProjects` `GET /integrations/supabase/projects` | `client.listSupabaseProjects()` | Bearer required |
+| integrations | `linkSupabaseProject` `POST /integrations/supabase/links` | `client.linkSupabaseProject({ project_id, supabase_ref })` | Bearer required |
+| integrations | `getSupabaseConnection` `GET /integrations/supabase/connection` | `client.getSupabaseConnection()` | Bearer required |
+| wallets | `getMyWallet` `GET /wallets/me` | `client.getMyWallet()` | Bearer required |
+| wallets | `listMyTransactions` `GET /wallets/me/transactions` | `client.listMyTransactions()` / `client.listAllMyTransactions()` | Bearer required |
+| usage | `getUsageSummary` `GET /usage/summary` | `client.getUsageSummary({ period: "month" })` | Bearer required |
+| usage | `getUsageContributions` `GET /usage/contributions` | `client.getUsageContributions({ start_date, end_date })` | Bearer required |
+| usage | `getUsageInsights` `GET /usage/insights` | `client.getUsageInsights({ timezone })` | Bearer required |
+| notifications | `listNotifications` `GET /notifications` | `client.listNotifications()` | Bearer required |
+| notifications | `getUnreadCount` `GET /notifications/unread-count` | `client.getUnreadCount()` | Bearer required |
+| notifications | `markNotificationRead` `PATCH /notifications/{id}` | `client.markNotificationRead(id)` | Bearer required |
+| notifications | `registerPushToken` `POST /push-tokens` | `client.registerPushToken({ token, device_type })` → 201 | Bearer required |
+| notifications | `removePushToken` `DELETE /push-tokens` | `client.removePushToken(token)` → void (204) | Bearer required |
+| billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
 Not covered on purpose: `getOpenApiDocument`/`getDocs` (meta) and
-`handleBillingWebhook` (Stripe-signed server hook).
+`handleBillingWebhook` (Stripe-signed server hook) / `handleGithubWebhook`
+(HMAC-signed server hook).
 
 ```ts
 // Async generation: create, then wait (backoff 2s → 30s, 10 min timeout).
@@ -69,13 +104,38 @@ const done = await client.waitForJob(job.id, {
 });
 if (done.status !== "succeeded") throw new Error(done.error?.message ?? done.status);
 
+// GitHub push job (project must be linked first):
+await client.linkGithubRepository({ project_id: 12, github_installation_id: 34 });
+const push = await client.createJob({ type: "github-push", project_id: 12 });
+
+// Prompt with images: upload first, then attach the manifest.
+const manifest = await client.uploadJobAttachments({ files: [imageBlob] });
+await client.createJob({ type: "prompt", input: { prompt: "redesign this" }, attachments: manifest.attachments });
+
 // Community feed: every page, one array.
 const projects = await client.listAllProjects({ visibility: "all" });
+const feed = await client.listAllExploreProjects({ q: "timer" });
+
+// Files round-trip + reshare + icon:
+await client.saveProjectFiles(12, { files: [{ path: "App.tsx", contents: "...", type: "CODE" }] });
+await client.reshareProject(12, { platform: "x" });
+await client.generateProjectIcon(12);
+
+// Wallet + usage + notifications:
+const wallet = await client.getMyWallet();
+const summary = await client.getUsageSummary({ period: "month" });
+const { unread_count } = await client.getUnreadCount();
+await client.registerPushToken({ token: expoPushToken, device_type: "ios" });
 
 // Top-up: 1 EUR = 1 credit, crediting happens in the webhook once paid.
 const co = await client.createBillingCheckout({ amount_eur: 20 });
 openBrowser(co.checkout_url);
 ```
+
+Multipart on React Native: `Blob` construction differs on Hermes — pass a
+prebuilt `FormData` instead (e.g. `form.append("file", { uri, name, type })`
+for avatars, `form.append("files", …)` + optional `idempotency_key` for job
+attachments). On Node/web a `Blob`/`File` (or `FormData`) works directly.
 
 ## Token expiry
 
@@ -122,7 +182,7 @@ Releases are cut by pushing a tag — `.github/workflows/release.yml` runs
 type-check, tests, contract check and `npm publish --provenance`:
 
 ```bash
-npm version 0.2.0 && git push origin main v0.2.0
+npm version 0.3.0 && git push origin main v0.3.0
 ```
 
 One-time bootstrap (npm org owner, on npmjs.com): open the

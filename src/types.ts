@@ -1,12 +1,12 @@
 /**
  * Types mirroring the swagger contract (`GET /v1/openapi.json`,
- * source file `api/openapi/v1.yaml`).
+ * vendored at `openapi/openapi.json`).
  * Hand-written on purpose: the surface is small and this keeps runtime
  * dependencies at zero. `scripts/contract-check.mjs` guarantees these stay in
  * sync with the live document.
- * Not covered on purpose: `getOpenApiDocument`/`getDocs` (meta endpoints)
- * and `handleBillingWebhook` (server-to-server, Stripe-signed — not a client
- * concern).
+ * Not covered on purpose: `getOpenApiDocument`/`getDocs` (meta endpoints),
+ * `handleBillingWebhook` (Stripe-signed server hook) and
+ * `handleGithubWebhook` (HMAC-signed server hook) — not client concerns.
  */
 
 // --- GET /health → operationId `getHealth` (security: [], no auth) ---
@@ -28,7 +28,7 @@ export interface Whoami {
   rate_limit?: RateLimitSnapshot;
 }
 
-// --- jobs → `createJob`/`getJob`, schemas `CreateJobRequest`/`Job` ---
+// --- jobs → `createJob`/`getJob`, schemas `CreatePromptJobRequest`/`CreateGithubPushJobRequest`/`Job` ---
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 
@@ -42,11 +42,40 @@ export interface JobInput {
   appName?: string | null;
 }
 
-export interface CreateJobRequest {
+export interface JobAttachmentRef {
+  /** Storage path in the job-attachments bucket (from `uploadJobAttachments`). */
+  path: string;
+  mime: "image/png" | "image/jpeg" | "image/webp";
+  size_bytes: number;
+  kind?: string;
+}
+
+export interface CreatePromptJobRequest {
   type: "prompt";
   /** Numeric project id; omit for first generation. */
   project_id?: number;
   input: JobInput & Record<string, unknown>;
+  /** Manifest entries from `POST /jobs/attachments`. */
+  attachments?: JobAttachmentRef[];
+  /** Expo push token notified on completion (stored in input). */
+  expo_push_token?: string;
+  /** Client-generated uuid; replay with the same key returns the existing job. */
+  idempotency_key?: string;
+}
+
+export interface CreateGithubPushJobRequest {
+  /** Push the project to its linked GitHub repo via the github-actions edge. */
+  type: "github-push";
+  project_id: number;
+  idempotency_key?: string;
+}
+
+/** `POST /jobs` body — `oneOf` with `type` discriminator. */
+export type CreateJobRequest = CreatePromptJobRequest | CreateGithubPushJobRequest;
+
+export interface AttachmentsManifest {
+  idempotency_key: string;
+  attachments: JobAttachmentRef[];
 }
 
 export interface Job {
@@ -74,14 +103,13 @@ export interface WaitForJobOptions {
   onProgress?: (job: Job) => void;
 }
 
-// --- projects → `listProjects`/`getProject`, schemas `Project`/`ProjectPage` ---
+// --- projects → `listProjects`/`createProject`/`getProject`/`updateProject`/`deleteProject`, schemas `Project`/`ProjectPage` ---
 
 export type ProjectVisibility = "mine" | "all";
 
 export interface Project {
   id: number;
   name: string;
-  description?: string;
   icon_url?: string;
   created_at: string;
   updated_at?: string;
@@ -106,6 +134,173 @@ export interface ListAllProjectsOptions extends Omit<ListProjectsOptions, "curso
   maxPages?: number;
 }
 
+export interface CreateProjectRequest {
+  name: string;
+  shared?: boolean;
+}
+
+export interface UpdateProjectRequest {
+  name?: string;
+  shared?: boolean;
+  icon_url?: string | null;
+}
+
+export interface ProjectFile {
+  path: string;
+  contents: string;
+  type?: string;
+  updated_at?: string;
+}
+
+export interface ProjectFileInput {
+  path: string;
+  contents: string;
+  type?: string;
+}
+
+export interface ProjectFilesPage {
+  data: ProjectFile[];
+}
+
+export interface ListProjectFilesOptions {
+  /** e.g. `CODE` — same view as `use-project-files.ts`. */
+  type?: string;
+}
+
+export interface SaveFilesRequest {
+  files: ProjectFileInput[];
+}
+
+export interface ReshareRequest {
+  platform: string;
+  share_metadata?: Record<string, unknown>;
+}
+
+/** `POST /projects/{id}/reshare` — free-form row (200 `{deduped:true}` on duplicate). */
+export type ReshareResponse = Record<string, unknown>;
+
+/** `POST /projects/{id}/icon` — proxied generate-project-icon edge result. */
+export type GenerateIconResponse = Record<string, unknown>;
+
+export interface PreviewError {
+  id?: string;
+  message?: string;
+  stack?: string | null;
+  created_at?: string;
+}
+
+export interface PreviewErrorsPage {
+  data: PreviewError[];
+}
+
+export interface ListPreviewErrorsOptions {
+  /** Pass true to also delete the returned rows (what the app does after rendering). */
+  consume?: boolean;
+}
+
+// --- explore → `listExploreProjects`, same `ProjectPage` shape ---
+
+export interface ListExploreProjectsOptions {
+  limit?: number;
+  cursor?: string;
+  /** Full-text query via RPC match_project. */
+  q?: string;
+}
+
+// --- moderation → `createReport`/`blockUser` ---
+
+export interface CreateReportRequest {
+  reported_project_id?: number;
+  reported_user_id?: string;
+  reason?: string;
+}
+
+/** `POST /reports` — free-form `{...}` row. */
+export type ReportResponse = Record<string, unknown>;
+
+export interface CreateBlockRequest {
+  blocked_id: string;
+}
+
+/** `POST /blocks` — free-form row (200 `deduped:true` on duplicate). */
+export type BlockResponse = Record<string, unknown>;
+
+// --- github → installations / repositories / token exchange ---
+
+export interface GithubInstallation {
+  id?: number;
+  login?: string | null;
+  avatar?: string | null;
+  name?: string | null;
+}
+
+export interface GithubInstallationsPage {
+  data: GithubInstallation[];
+}
+
+export interface GithubRepository {
+  project_id?: number;
+  github_installation_id?: number;
+  github_repository_name?: string;
+  github_last_sync?: string;
+}
+
+export interface GithubRepositoriesPage {
+  data: GithubRepository[];
+}
+
+export interface LinkGithubRepositoryRequest {
+  project_id: number;
+  github_installation_id: number;
+  /** Defaults to `michelangelo-{project_id}` (app convention) when omitted. */
+  github_repository_name?: string;
+}
+
+export interface ExchangeGithubTokenRequest {
+  code: string;
+  redirect_uri?: string;
+}
+
+export interface ExchangeGithubTokenResponse {
+  access_token: string;
+}
+
+// --- integrations/supabase → OAuth login / projects / links / connection ---
+
+export interface StartSupabaseOAuthRequest {
+  code_challenge: string;
+  code_verifier?: string;
+}
+
+export interface StartSupabaseOAuthResponse {
+  authorize_url: string;
+  return_url: string;
+}
+
+/** `GET /integrations/supabase/projects` — edge-proxied `{projects, organizations}`. */
+export type SupabaseProjectsResponse = Record<string, unknown>;
+
+export interface SupabaseProjectLink {
+  project_id?: number;
+  supabase_project_ref?: string;
+  supabase_project_name?: string;
+  api_url?: string;
+}
+
+export interface LinkSupabaseProjectRequest {
+  project_id: number;
+  supabase_ref: string;
+}
+
+/** `POST /integrations/supabase/links` — proxied edge result (upserted link). */
+export type LinkSupabaseProjectResponse = Record<string, unknown>;
+
+export interface SupabaseConnection {
+  connected: boolean;
+  supabase_user_id?: string | null;
+  supabase_username?: string | null;
+}
+
 // --- billing → `createBillingCheckout`, schemas `CreateBillingCheckout*` ---
 // (`handleBillingWebhook` intentionally skipped — Stripe-signed server hook.)
 
@@ -127,7 +322,87 @@ export interface BillingCheckout {
   currency: "eur";
 }
 
-// --- users → `getMe`, schema `Me` (sparse fieldsets) ---
+// --- wallets → `getMyWallet`/`listMyTransactions` ---
+
+export interface Wallet {
+  balance: number;
+  bonus_balance: number;
+  bonus_expires_at?: string | null;
+  total: number;
+}
+
+export interface WalletTransaction {
+  id?: string;
+  delta?: number;
+  reason?: "bonus" | "topup" | "spend" | "refund" | "migration" | "adjustment";
+  credits?: number | null;
+  product_id?: string | null;
+  created_at?: string;
+}
+
+export interface WalletTransactionsPage {
+  data: WalletTransaction[];
+  next_cursor?: string | null;
+}
+
+export interface ListTransactionsOptions {
+  limit?: number;
+  /** ISO timestamp cursor over created_at. */
+  cursor?: string;
+}
+
+// --- usage → `getUsageSummary`/`getUsageContributions`/`getUsageInsights` ---
+
+export type UsagePeriod = "month" | "week" | "all";
+
+export interface UsageSummary {
+  period_start?: string;
+  period_end?: string;
+  run_count?: number;
+  generation_count?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  has_usage_data?: boolean;
+}
+
+export interface GetUsageSummaryOptions {
+  period?: UsagePeriod;
+  year?: number;
+  month?: number;
+}
+
+export interface UsageContribution {
+  day?: string;
+  run_count?: number;
+  total_tokens?: number;
+}
+
+export interface UsageContributionsPage {
+  data: UsageContribution[];
+}
+
+export interface GetUsageContributionsOptions {
+  start_date?: string;
+  end_date?: string;
+}
+
+export interface UsageInsights {
+  lines_of_code?: number;
+  files_count?: number;
+  current_streak?: number;
+  best_streak?: number;
+  best_month?: string;
+  best_month_apps?: number;
+  peak_hour?: number;
+}
+
+export interface GetUsageInsightsOptions {
+  timezone?: string;
+}
+
+// --- users → `getMe`/`updateMe`/`deleteMe`/`uploadMyAvatar`, schema `Me` (sparse fieldsets) ---
 
 export type MeField = "username" | "email" | "avatar_url";
 
@@ -136,6 +411,69 @@ export interface Me {
   username?: string | null;
   email?: string | null;
   avatar_url?: string | null;
+}
+
+export interface UpdateMeRequest {
+  username?: string;
+  avatar_url?: string | null;
+}
+
+export interface AvatarUploadResponse {
+  avatar_url: string;
+}
+
+// --- notifications → `listNotifications`/`getUnreadCount`/`markNotificationRead` + push tokens ---
+
+export interface NotificationSender {
+  username?: string | null;
+  avatar_url?: string | null;
+  [key: string]: unknown;
+}
+
+export interface Notification {
+  id?: string;
+  type?: string;
+  entity_type?: string;
+  entity_id?: number | null;
+  metadata?: Record<string, unknown>;
+  is_read?: boolean;
+  created_at?: string;
+  sender?: NotificationSender | null;
+}
+
+export interface NotificationsPage {
+  data: Notification[];
+  next_cursor?: string | null;
+}
+
+export interface ListNotificationsOptions {
+  limit?: number;
+  /** ISO timestamp cursor over created_at. */
+  cursor?: string;
+}
+
+export interface UnreadCountResponse {
+  unread_count: number;
+}
+
+export interface MarkNotificationReadRequest {
+  is_read: true;
+}
+
+export type DeviceType = "ios" | "android" | "web";
+
+export interface RegisterPushTokenRequest {
+  token: string;
+  device_type?: DeviceType;
+  locale?: string;
+  time_zone?: string;
+}
+
+/** `POST /push-tokens` — free-form upsert result. */
+export type RegisterPushTokenResponse = Record<string, unknown>;
+
+export interface RemovePushTokenRequest {
+  token: string;
 }
 
 // --- `#/components/schemas/Error` (401/400/404/429 bodies) ---
