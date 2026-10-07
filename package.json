@@ -1,6 +1,6 @@
 {
   "name": "@michelangelo-land/sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "description": "Official Michelangelo Land SDK — dynamic OAuth 2.1 + PKCE auth with in-memory tokens, typed client generated from the OpenAPI contract (api.michelangelo.land/v1/openapi.json).",
