@@ -19,6 +19,7 @@ import type {
   GetUsageContributionsOptions,
   GetUsageInsightsOptions,
   GetUsageSummaryOptions,
+  GithubInstallation,
   GithubInstallationsPage,
   GithubRepositoriesPage,
   GithubRepository,
@@ -34,6 +35,8 @@ import type {
   ListProjectFilesOptions,
   ListProjectsOptions,
   ListTransactionsOptions,
+  MarkAllNotificationsReadRequest,
+  MarkAllNotificationsReadResponse,
   MarkNotificationReadRequest,
   Me,
   MeField,
@@ -51,6 +54,7 @@ import type {
   ReshareRequest,
   ReshareResponse,
   SaveFilesRequest,
+  SaveGithubInstallationRequest,
   StartSupabaseOAuthRequest,
   StartSupabaseOAuthResponse,
   SupabaseConnection,
@@ -529,6 +533,14 @@ export class MichelangeloClient {
     return this.request<GithubInstallationsPage>("/github/installations");
   }
 
+  /** `POST /github/installations` — store installation after OAuth (upsert on `id`). */
+  saveGithubInstallation(input: SaveGithubInstallationRequest): Promise<GithubInstallation> {
+    return this.request<GithubInstallation>("/github/installations", {
+      method: "POST",
+      body: input,
+    });
+  }
+
   /** `GET /github/repositories` — repos linked by the user. */
   listGithubRepositories(): Promise<GithubRepositoriesPage> {
     return this.request<GithubRepositoriesPage>("/github/repositories");
@@ -537,6 +549,15 @@ export class MichelangeloClient {
   /** `POST /github/repositories` — save the selected repo (upsert). */
   linkGithubRepository(input: LinkGithubRepositoryRequest): Promise<GithubRepository> {
     return this.request<GithubRepository>("/github/repositories", { method: "POST", body: input });
+  }
+
+  /**
+   * `DELETE /github/repositories?project_id=` — unlink repo from a project.
+   * Idempotent; resolves void on HTTP 204.
+   */
+  async unlinkGithubRepository(projectId: number): Promise<void> {
+    const query = new URLSearchParams({ project_id: String(projectId) }).toString();
+    await this.request<void>(`/github/repositories?${query}`, { method: "DELETE" });
   }
 
   /**
@@ -565,6 +586,15 @@ export class MichelangeloClient {
       method: "POST",
       body: input,
     });
+  }
+
+  /**
+   * `DELETE /integrations/supabase/links?project_id=` — unlink app ↔ Supabase ref.
+   * Idempotent; resolves void on HTTP 204.
+   */
+  async unlinkSupabaseProject(projectId: number): Promise<void> {
+    const query = new URLSearchParams({ project_id: String(projectId) }).toString();
+    await this.request<void>(`/integrations/supabase/links?${query}`, { method: "DELETE" });
   }
 
   /** `GET /integrations/supabase/connection` — connection state (safe columns). */
@@ -657,6 +687,16 @@ export class MichelangeloClient {
     input: MarkNotificationReadRequest = { is_read: true },
   ): Promise<Notification> {
     return this.request<Notification>(`/notifications/${encodeURIComponent(notificationId)}`, {
+      method: "PATCH",
+      body: input,
+    });
+  }
+
+  /** `PATCH /notifications` — bulk mark-all-as-read (`{ is_read: true }`). */
+  markAllNotificationsRead(
+    input: MarkAllNotificationsReadRequest = { is_read: true },
+  ): Promise<MarkAllNotificationsReadResponse> {
+    return this.request<MarkAllNotificationsReadResponse>("/notifications", {
       method: "PATCH",
       body: input,
     });

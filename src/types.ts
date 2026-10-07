@@ -238,6 +238,17 @@ export interface GithubInstallationsPage {
   data: GithubInstallation[];
 }
 
+/** `POST /github/installations` — store installation after OAuth (upsert on `id`). */
+export interface SaveGithubInstallationRequest {
+  /** GitHub App installation id (upserted on conflict `id`). */
+  id: number;
+  /** User OAuth token (write-only, stored server-side, never returned). */
+  ghu: string;
+  login?: string;
+  avatar?: string | null;
+  name?: string | null;
+}
+
 export interface GithubRepository {
   project_id?: number;
   github_installation_id?: number;
@@ -422,7 +433,7 @@ export interface AvatarUploadResponse {
   avatar_url: string;
 }
 
-// --- notifications → `listNotifications`/`getUnreadCount`/`markNotificationRead` + push tokens ---
+// --- notifications → `listNotifications`/`getUnreadCount`/`markNotificationRead`/`markAllNotificationsRead` + push tokens ---
 
 export interface NotificationSender {
   username?: string | null;
@@ -458,6 +469,15 @@ export interface UnreadCountResponse {
 
 export interface MarkNotificationReadRequest {
   is_read: true;
+}
+
+/** `PATCH /notifications` — bulk mark-all-as-read (`{ is_read: true }`). */
+export interface MarkAllNotificationsReadRequest {
+  is_read: true;
+}
+
+export interface MarkAllNotificationsReadResponse {
+  updated_count: number;
 }
 
 export type DeviceType = "ios" | "android" | "web";

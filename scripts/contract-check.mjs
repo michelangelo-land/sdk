@@ -22,8 +22,8 @@ const EXPECTED = {
     "listGithubRepositories", "linkGithubRepository", "handleGithubWebhook",
     "startSupabaseOAuth", "listSupabaseProjects", "linkSupabaseProject",
     "getSupabaseConnection", "getMyWallet", "listMyTransactions", "getUsageSummary",
-    "getUsageContributions", "getUsageInsights", "listNotifications", "getUnreadCount",
-    "markNotificationRead", "registerPushToken", "removePushToken",
+    "getUsageContributions",     "getUsageInsights", "listNotifications", "getUnreadCount",
+    "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
   ],
   paths: [
     "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar",
@@ -51,8 +51,9 @@ const EXPECTED = {
     "startSupabaseOAuth", "listSupabaseProjects", "linkSupabaseProject",
     "getSupabaseConnection", "getMyWallet", "listMyTransactions", "getUsageSummary",
     "getUsageContributions", "getUsageInsights", "listNotifications", "getUnreadCount",
-    "markNotificationRead", "registerPushToken", "removePushToken",
-    "createBillingCheckout",
+    "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
+    "createBillingCheckout", "saveGithubInstallation", "unlinkGithubRepository",
+    "unlinkSupabaseProject",
   ],
   skippedByDesign: [
     "getOpenApiDocument", "getDocs", "handleBillingWebhook", "handleGithubWebhook",

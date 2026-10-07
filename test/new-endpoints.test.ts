@@ -320,4 +320,56 @@ describe("notifications + push tokens", () => {
     await client.removePushToken({ token: "ExponentPushToken[y]" });
     assert.deepEqual(deleteBody, { token: "ExponentPushToken[y]" });
   });
+
+  it("markAllNotificationsRead PATCHes /notifications with { is_read: true }", async () => {
+    let seen: { url: string; method?: string; body: unknown } | null = null;
+    const fetchFn = stubFetch((url, init) => {
+      seen = { url: String(url), method: init?.method, body: JSON.parse(String(init?.body)) };
+      return json({ updated_count: 7 });
+    });
+    const out = await authed(fetchFn).markAllNotificationsRead();
+    assert.equal(out.updated_count, 7);
+    assert.ok(seen!.url.endsWith("/v1/notifications"));
+    assert.equal(seen!.method, "PATCH");
+    assert.deepEqual(seen!.body, { is_read: true });
+  });
+});
+
+describe("github + supabase unlink", () => {
+  it("saveGithubInstallation POSTs /github/installations", async () => {
+    let body: unknown = null;
+    const fetchFn = stubFetch((url, init) => {
+      assert.ok(String(url).endsWith("/v1/github/installations"));
+      assert.equal(init?.method, "POST");
+      body = JSON.parse(String(init?.body));
+      return json({ id: 11, login: "octo" }, 201);
+    });
+    const out = await authed(fetchFn).saveGithubInstallation({ id: 11, ghu: "ghu_x", login: "octo" });
+    assert.equal(out.login, "octo");
+    assert.deepEqual(body, { id: 11, ghu: "ghu_x", login: "octo" });
+  });
+
+  it("unlinkGithubRepository DELETEs with project_id and resolves void on 204", async () => {
+    let seen = "";
+    const fetchFn = stubFetch((url, init) => {
+      seen = String(url);
+      assert.equal(init?.method, "DELETE");
+      return new Response(null, { status: 204 });
+    });
+    assert.equal(await authed(fetchFn).unlinkGithubRepository(12), undefined);
+    assert.ok(seen.includes("/v1/github/repositories?"), seen);
+    assert.ok(seen.includes("project_id=12"), seen);
+  });
+
+  it("unlinkSupabaseProject DELETEs with project_id and resolves void on 204", async () => {
+    let seen = "";
+    const fetchFn = stubFetch((url, init) => {
+      seen = String(url);
+      assert.equal(init?.method, "DELETE");
+      return new Response(null, { status: 204 });
+    });
+    assert.equal(await authed(fetchFn).unlinkSupabaseProject(7), undefined);
+    assert.ok(seen.includes("/v1/integrations/supabase/links?"), seen);
+    assert.ok(seen.includes("project_id=7"), seen);
+  });
 });

@@ -1532,6 +1532,50 @@
             "$ref": "#/components/responses/Unauthorized"
           }
         }
+      },
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "saveGithubInstallation",
+        "summary": "Store installation after OAuth (upsert github_installations)",
+        "description": "Replaces `storeInstallation` in `use-github-mutations.ts` (which no longer writes to the DB — it only returns `{installation_id,profile}`). Upserts `{id,user_id,ghu,login,avatar,name}` on conflict `id`; `user_id` is always forced from the JWT (client value ignored). `ghu` (user OAuth token) is write-only — never returned. The webhook edge only refreshes rows, so without this call installations would never exist.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveGithubInstallationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Installation stored (safe columns only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubInstallation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
       }
     },
     "/github/repositories": {
@@ -1627,6 +1671,44 @@
                 }
               }
             }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "unlinkGithubRepository",
+        "summary": "Unlink repo from a project (delete github_repositories)",
+        "description": "Unblocks `useGitHubDisconnect` (which throws until this exists). Deletes the link row for `?project_id=` scoped to the caller's installations (a user can only unlink their own links). Idempotent: 204 even when no link exists.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Repository unlinked (idempotent)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1860,6 +1942,44 @@
                 }
               }
             }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "unlinkSupabaseProject",
+        "summary": "Unlink app ↔ Supabase ref (delete supabase_project_links)",
+        "description": "Unblocks `useSupabaseUnlink` (which throws until this exists). Deletes the link row for `?project_id=` scoped to the caller (RLS `Users can manage own supabase project links`). Idempotent: 204 even when no link exists.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project unlinked (idempotent)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2232,6 +2352,69 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "markAllNotificationsRead",
+        "summary": "Mark all as read (bulk update, mirrors markAllAsRead)",
+        "description": "Mirrors `markAllAsRead` in `push-notifications.tsx` (fired on blur of the notifications screen): sets `is_read=true` on all unread rows of the caller. Only `{is_read:true}` is accepted. Returns the updated count.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "is_read"
+                ],
+                "properties": {
+                  "is_read": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk update result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "updated_count"
+                  ],
+                  "properties": {
+                    "updated_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -3177,6 +3360,40 @@
           "github_repository_name": {
             "type": "string",
             "description": "Defaults to michelangelo-{project_id} (app convention)"
+          }
+        }
+      },
+      "SaveGithubInstallationRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "ghu"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "GitHub App installation id (upserted on conflict id)"
+          },
+          "ghu": {
+            "type": "string",
+            "description": "User OAuth token (write-only, stored server-side, never returned)"
+          },
+          "login": {
+            "type": "string"
+          },
+          "avatar": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

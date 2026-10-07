@@ -74,11 +74,13 @@ npm run example:node-login
 | moderation | `createReport` `POST /reports` | `client.createReport()` → 201 | Bearer required |
 | moderation | `blockUser` `POST /blocks` | `client.blockUser({ blocked_id })` | Bearer required |
 | github | `exchangeGithubToken` `POST /github/token` | `client.exchangeGithubToken({ code })` | Bearer required |
-| github | `listGithubInstallations` `GET /github/installations` | `client.listGithubInstallations()` | Bearer required |
+| github | `listGithubInstallations` / `saveGithubInstallation` | `client.listGithubInstallations()` / `client.saveGithubInstallation({ id, ghu })` | Bearer required |
 | github | `listGithubRepositories` / `linkGithubRepository` | `client.listGithubRepositories()` / `client.linkGithubRepository()` | Bearer required |
+| github | `unlinkGithubRepository` `DELETE /github/repositories` | `client.unlinkGithubRepository(project_id)` → void (204) | Bearer required |
 | integrations | `startSupabaseOAuth` `POST /integrations/supabase/login` | `client.startSupabaseOAuth({ code_challenge })` → open `authorize_url` | Bearer required |
 | integrations | `listSupabaseProjects` `GET /integrations/supabase/projects` | `client.listSupabaseProjects()` | Bearer required |
 | integrations | `linkSupabaseProject` `POST /integrations/supabase/links` | `client.linkSupabaseProject({ project_id, supabase_ref })` | Bearer required |
+| integrations | `unlinkSupabaseProject` `DELETE /integrations/supabase/links` | `client.unlinkSupabaseProject(project_id)` → void (204) | Bearer required |
 | integrations | `getSupabaseConnection` `GET /integrations/supabase/connection` | `client.getSupabaseConnection()` | Bearer required |
 | wallets | `getMyWallet` `GET /wallets/me` | `client.getMyWallet()` | Bearer required |
 | wallets | `listMyTransactions` `GET /wallets/me/transactions` | `client.listMyTransactions()` / `client.listAllMyTransactions()` | Bearer required |
@@ -88,6 +90,7 @@ npm run example:node-login
 | notifications | `listNotifications` `GET /notifications` | `client.listNotifications()` | Bearer required |
 | notifications | `getUnreadCount` `GET /notifications/unread-count` | `client.getUnreadCount()` | Bearer required |
 | notifications | `markNotificationRead` `PATCH /notifications/{id}` | `client.markNotificationRead(id)` | Bearer required |
+| notifications | `markAllNotificationsRead` `PATCH /notifications` | `client.markAllNotificationsRead()` → `{ updated_count }` | Bearer required |
 | notifications | `registerPushToken` `POST /push-tokens` | `client.registerPushToken({ token, device_type })` → 201 | Bearer required |
 | notifications | `removePushToken` `DELETE /push-tokens` | `client.removePushToken(token)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
