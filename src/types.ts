@@ -334,7 +334,7 @@ export interface SupabaseConnection {
 // (`handleBillingWebhook` intentionally skipped — Stripe-signed server hook.)
 
 export interface CreateBillingCheckoutRequest {
-  /** Whole euros to charge, 1..1000 (1 EUR = 1 credit). */
+  /** Whole euros to charge, 1..1000 (1 EUR = 100 credits, 1 credit = 1 EUR-cent). */
   amount_eur: number;
   success_url?: string;
   cancel_url?: string;
@@ -345,19 +345,33 @@ export interface BillingCheckout {
   session_id: string;
   /** Open this URL in a browser to collect payment. */
   checkout_url: string;
+  /** Charged amount in euro cents. */
   amount_cents: number;
-  /** Credits the wallet receives once paid. */
+  /** Credits the wallet receives once paid (1 EUR = 100 credits). */
   credits: number;
   currency: "eur";
 }
 
 // --- wallets → `getMyWallet`/`listMyTransactions` ---
+// Unit is EUR-cent credits: 1 credit = 1 EUR-cent, 1 EUR = 100 credits.
+// Money math never uses floats — render `display_balance` / `display_total`
+// / `display_cost` verbatim (preformatted server-side, it-IT EUR).
 
 export interface Wallet {
+  /** Paid balance in EUR-cent credits. */
   balance: number;
+  /** Bonus in EUR-cent credits (0 when expired). */
   bonus_balance: number;
   bonus_expires_at?: string | null;
+  /** balance + bonus_balance in EUR-cent credits. */
   total: number;
+  currency: "eur";
+  /** Paid balance as decimal EUR string with 2 decimals (no float), e.g. "10.10". */
+  balance_eur: string;
+  /** Preformatted balance for direct rendering (it-IT), e.g. "10,10 €". */
+  display_balance?: string;
+  /** Preformatted total for direct rendering (it-IT), e.g. "10,10 €". */
+  display_total: string;
 }
 
 export interface WalletTransaction {
@@ -367,6 +381,12 @@ export interface WalletTransaction {
   credits?: number | null;
   product_id?: string | null;
   created_at?: string;
+  /**
+   * Spend rows carry `run_id`, `model`, `provider`, `cost_eur` ("1.05") and
+   * `display_cost` ("1,05 €") preformatted server-side — render
+   * `display_cost` verbatim. Top-up rows carry `stripe_session_id` + `amount_eur`.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 export interface WalletTransactionsPage {

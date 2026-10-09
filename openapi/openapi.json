@@ -445,7 +445,7 @@
         ],
         "operationId": "createJob",
         "summary": "Create an async job",
-        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt` (existing): `input.prompt` is evaluated server-side (invalid → 400, quota → 429). Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and         `expo_push_token` (stored in `input`, used for completion push). Top-level `live_activity_token`, `live_activity_user` and `supabase_project_ref` are folded into `input` the same way (top-level wins on conflict with `input` keys); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n`type=github-push` (new): needs `project_id` of a GitHub-linked project. Creates the row, synchronously invokes the `github-actions` push (Snack bundle → GitHub), then writes `succeeded`/`failed` with `{pushed,commitSha}` into the row. Requires the `github-push` value in the `jobs_type_check` constraint (migration `widen_jobs_type_github_push`).\n",
+        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt` (existing): `input.prompt` is evaluated server-side (invalid → 400, quota → 429, overdraft floor → 402 `insufficient_credits`). Small overdraft is allowed: a user with 1 cent still runs and goes negative, the next top-up absorbs the red. Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and         `expo_push_token` (stored in `input`, used for completion push). Top-level `live_activity_token`, `live_activity_user` and `supabase_project_ref` are folded into `input` the same way (top-level wins on conflict with `input` keys); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n`type=github-push` (new): needs `project_id` of a GitHub-linked project. Creates the row, synchronously invokes the `github-actions` push (Snack bundle → GitHub), then writes `succeeded`/`failed` with `{pushed,commitSha}` into the row. Requires the `github-push` value in the `jobs_type_check` constraint (migration `widen_jobs_type_github_push`).\n",
         "security": [
           {
             "oauth2": []
@@ -500,6 +500,16 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "description": "Insufficient credits — top up (overdraft floor reached)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "404": {
             "description": "Project not found (github-push) — same Error shape",
@@ -734,7 +744,7 @@
         ],
         "operationId": "createBillingCheckout",
         "summary": "Create a Stripe Checkout Session for wallet top-up",
-        "description": "Creates a one-time EUR Checkout Session (`mode: payment`) for the authenticated user. The app opens `checkout_url` in a browser/Desktop webview. Supports preset amounts (5, 20, 100, 200 EUR — matching the existing Stripe prices) or any custom whole-euro amount via `amount_eur`. Conversion is fixed: 1 EUR = 1 credit, credited to `wallets.balance` by the Stripe webhook (`checkout.session.completed`). Pass `success_url`/`cancel_url` to deep-link back into Desktop/michelangelo-app (defaults come from server env).\n",
+        "description": "Creates a one-time EUR Checkout Session (`mode: payment`) for the authenticated user. The app opens `checkout_url` in a browser/Desktop webview. Supports preset amounts (5, 20, 100, 200 EUR — matching the existing Stripe prices) or any custom whole-euro amount via `amount_eur`. Conversion is fixed: 1 EUR = 100 credits (1 credit = 1 EUR-cent), credited to `wallets.balance` by the Stripe webhook (`checkout.session.completed`). Pass `success_url`/`cancel_url` to deep-link back into Desktop/michelangelo-app (defaults come from server env).\n",
         "security": [
           {
             "oauth2": []
@@ -780,7 +790,7 @@
         ],
         "operationId": "handleBillingWebhook",
         "summary": "Stripe webhook — credits wallets on payment",
-        "description": "Stripe calls this endpoint (no auth — verified via `Stripe-Signature` against `STRIPE_WEBHOOK_SECRET`). Handles `checkout.session.completed` with `payment_status: paid`: idempotently inserts a `wallet_transactions` row (`reason: topup`) and increments `wallets.balance` by `credits` (1 EUR = 1 credit). Configure the URL in the Stripe Dashboard; keep the legacy Supabase `stripe-webhook` endpoint until traffic is migrated.\n",
+        "description": "Stripe calls this endpoint (no auth — verified via `Stripe-Signature` against `STRIPE_WEBHOOK_SECRET`). Handles `checkout.session.completed` with `payment_status: paid`: idempotently inserts a `wallet_transactions` row (`reason: topup`) and increments `wallets.balance` by `credits` (1 EUR = 100 credits). Configure the URL in the Stripe Dashboard; keep the legacy Supabase `stripe-webhook` endpoint until traffic is migrated.\n",
         "security": [],
         "requestBody": {
           "required": true,
@@ -2071,7 +2081,7 @@
         ],
         "operationId": "getMyWallet",
         "summary": "Balance + bonus (select wallets)",
-        "description": "Mirrors `use-credit-balance.ts:fetchCreditBalance` wallet leg: selects `balance,bonus_balance,bonus_expires_at` for the caller. Expired bonus is reported as 0 bonus (same rule as RPC `get_wallet_balance`).\n",
+        "description": "Mirrors `use-credit-balance.ts:fetchCreditBalance` wallet leg: selects `balance,bonus_balance,bonus_expires_at` for the caller. Expired bonus is reported as 0 bonus (same rule as RPC `get_wallet_balance`). Unit is EUR-cent credits (1 EUR = 100 credits); `display_*` fields are preformatted server-side with `Intl.it-IT EUR` — clients render them verbatim and never compute `balance/100` themselves. New signups get a 500-credit (€5.00) welcome bonus valid 30 days; spend consumes bonus first, then paid balance, which may go down to −500 (−€5.00 overdraft) before `POST /jobs` returns `402 insufficient_credits`.\n",
         "security": [
           {
             "oauth2": []
@@ -2107,6 +2117,7 @@
         ],
         "operationId": "listMyTransactions",
         "summary": "Top-up/spend history (select wallet_transactions)",
+        "description": "Per-generation spend log: every `spend` row carries `metadata` with `run_id`, `model`, `provider`, `cost_eur` (\"1.05\") and `display_cost` (\"1,05 €\") preformatted server-side — clients render `display_cost` verbatim so the user sees what each generation cost.\n",
         "security": [
           {
             "oauth2": []
@@ -2938,14 +2949,20 @@
         "required": [
           "balance",
           "bonus_balance",
-          "total"
+          "total",
+          "currency",
+          "balance_eur",
+          "display_total"
         ],
+        "description": "Wallet snapshot in minor units. 1 credit = 1 EUR-cent. Money math never uses floats: clients render `display_total` / `display_balance` verbatim and never divide `balance` themselves.\n",
         "properties": {
           "balance": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Paid balance in EUR-cent credits"
           },
           "bonus_balance": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Bonus in EUR-cent credits (0 when expired)"
           },
           "bonus_expires_at": {
             "type": [
@@ -2955,7 +2972,29 @@
             "format": "date-time"
           },
           "total": {
-            "type": "integer"
+            "type": "integer",
+            "description": "balance + bonus_balance in EUR-cent credits"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "eur"
+            ]
+          },
+          "balance_eur": {
+            "type": "string",
+            "description": "Paid balance as decimal EUR string with 2 decimals (no float)",
+            "example": "10.10"
+          },
+          "display_balance": {
+            "type": "string",
+            "description": "Preformatted balance for direct rendering (it-IT)",
+            "example": "10,10 €"
+          },
+          "display_total": {
+            "type": "string",
+            "description": "Preformatted total for direct rendering (it-IT)",
+            "example": "10,10 €"
           }
         }
       },
@@ -2995,6 +3034,11 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Spend rows carry run_id, model, provider, cost_eur and display_cost; topup rows carry stripe_session_id and amount_eur.\n",
+            "additionalProperties": true
           }
         }
       },
@@ -3135,54 +3179,6 @@
           },
           "time_zone": {
             "type": "string"
-          }
-        }
-      },
-      "CreateJobRequest": {
-        "deprecated": true,
-        "description": "Use CreatePromptJobRequest / CreateGithubPushJobRequest (oneOf on POST /jobs).",
-        "type": "object",
-        "required": [
-          "type",
-          "input"
-        ],
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "prompt"
-            ],
-            "description": "Job kind. Only `prompt` in v0.1; grows with the runner catalog"
-          },
-          "project_id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Numeric project id (matches public.projects.id)"
-          },
-          "input": {
-            "type": "object",
-            "description": "Job-specific payload (e.g. the prompt text and options). `model` and `appName` are optional: when omitted the API evaluates the prompt server-side (ADR 0001 / D6) and fills them in before the runner picks up the job.\n",
-            "additionalProperties": true,
-            "properties": {
-              "prompt": {
-                "type": "string"
-              },
-              "model": {
-                "type": "string",
-                "enum": [
-                  "light",
-                  "full"
-                ],
-                "description": "Vendor-neutral generation tier. `light`: faster and cheaper, for simple changes. `full`: deepest reasoning, for complex builds. The concrete model behind each tier is a server-side detail and may change over time. Server-enriched from prompt evaluation when absent.\n"
-              },
-              "appName": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "Generated app name (first generation only); server-enriched when absent"
-              }
-            }
           }
         }
       },
@@ -3693,7 +3689,7 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1000,
-            "description": "Whole euros to charge (1 EUR = 1 credit). Presets in the app: 5, 20, 100, 200 — any integer 1..1000 accepted for custom amounts. Always charged in EUR.\n",
+            "description": "Whole euros to charge (1 EUR = 100 credits, 1 credit = 1 EUR-cent). Presets in the app: 5, 20, 100, 200 — any integer 1..1000 accepted for custom amounts. Always charged in EUR.\n",
             "example": 20
           },
           "success_url": {
@@ -3734,8 +3730,8 @@
           },
           "credits": {
             "type": "integer",
-            "description": "Credits the wallet receives once paid (1 EUR = 1)",
-            "example": 20
+            "description": "Credits the wallet receives once paid (1 EUR = 100 credits)",
+            "example": 2000
           },
           "currency": {
             "type": "string",

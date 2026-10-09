@@ -28,6 +28,10 @@ export class MichelangeloApiError extends Error {
   isRateLimited(): boolean {
     return this.status === 429;
   }
+
+  isInsufficientCredits(): boolean {
+    return this.status === 402;
+  }
 }
 
 /** Error thrown for OAuth / session failures (no `code` from the API shape). */

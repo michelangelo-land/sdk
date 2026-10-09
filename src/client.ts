@@ -289,6 +289,9 @@ export class MichelangeloClient {
    * immediately (HTTP 202; 200 on idempotent replay). Poll `getJob` /
    * `waitForJob` for progress. `type: "prompt"` for generations,
    * `type: "github-push"` to push a linked project to GitHub.
+   * 402 `insufficient_credits` when the overdraft floor is reached — top up
+   * via `createBillingCheckout`. Small overdraft is allowed: a user with
+   * 1 cent still runs and goes negative, the next top-up absorbs the red.
    */
   createJob(input: CreateJobRequest): Promise<Job> {
     return this.request<Job>("/jobs", { method: "POST", body: input });
@@ -613,12 +616,21 @@ export class MichelangeloClient {
     return this.request<SupabaseConnection>("/integrations/supabase/connection");
   }
 
-  /** `GET /wallets/me` — balance + bonus. Expired bonus is reported as 0. */
+  /**
+   * `GET /wallets/me` — balance + bonus in EUR-cent credits
+   * (1 credit = 1 EUR-cent). Expired bonus is reported as 0.
+   * Render `display_balance` / `display_total` verbatim (preformatted
+   * server-side, it-IT EUR) — never compute `balance / 100` yourself.
+   */
   getMyWallet(): Promise<Wallet> {
     return this.request<Wallet>("/wallets/me");
   }
 
-  /** `GET /wallets/me/transactions` — top-up/spend history (cursor over created_at). */
+  /**
+   * `GET /wallets/me/transactions` — top-up/spend history (cursor over created_at).
+   * Every `spend` row carries `metadata` with `run_id`, `model`, `provider`,
+   * `cost_eur` and preformatted `display_cost` — render `display_cost` verbatim.
+   */
   listMyTransactions(options: ListTransactionsOptions = {}): Promise<WalletTransactionsPage> {
     const params = new URLSearchParams();
     params.set("limit", String(options.limit ?? 20));
@@ -729,8 +741,8 @@ export class MichelangeloClient {
 
   /**
    * `POST /billing/checkouts` — Stripe Checkout Session for wallet top-up
-   * (HTTP 201, 1 EUR = 1 credit). Open `checkout_url` in a browser/webview;
-   * crediting happens via the Stripe webhook once paid.
+   * (HTTP 201, 1 EUR = 100 credits, 1 credit = 1 EUR-cent). Open `checkout_url`
+   * in a browser/webview; crediting happens via the Stripe webhook once paid.
    */
   createBillingCheckout(input: CreateBillingCheckoutRequest): Promise<BillingCheckout> {
     return this.request<BillingCheckout>("/billing/checkouts", { method: "POST", body: input });
@@ -764,6 +776,7 @@ function appendFile(form: FormData, field: string, file: Blob, filename?: string
 
 function httpCodeToErrorCode(status: number): string {
   if (status === 401) return "invalid_token";
+  if (status === 402) return "insufficient_credits";
   if (status === 404) return "not_found";
   if (status === 429) return "rate_limited";
   return "http_error";

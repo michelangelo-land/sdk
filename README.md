@@ -102,6 +102,7 @@ Not covered on purpose: `getOpenApiDocument`/`getDocs` (meta) and
 
 ```ts
 // Async generation: create, then wait (backoff 2s → 30s, 10 min timeout).
+// createJob throws 402 insufficient_credits when the overdraft floor is reached.
 const job = await client.createJob({ type: "prompt", input: { prompt: "a timer app" } });
 const done = await client.waitForJob(job.id, {
   onProgress: (j) => console.log(j.status),
@@ -138,14 +139,18 @@ await client.saveProjectFiles(12, { files: [{ path: "App.tsx", contents: "...", 
 await client.reshareProject(12, { platform: "x" });
 await client.generateProjectIcon(12);
 
-// Wallet + usage + notifications:
+// Wallet + usage + notifications (money in EUR-cent credits: 1 EUR = 100 credits,
+// render display_* verbatim — never divide balance yourself):
 const wallet = await client.getMyWallet();
+console.log(wallet.display_total); // e.g. "10,10 €"
 const summary = await client.getUsageSummary({ period: "month" });
 const { unread_count } = await client.getUnreadCount();
 await client.registerPushToken({ token: expoPushToken, device_type: "ios" });
 
-// Top-up: 1 EUR = 1 credit, crediting happens in the webhook once paid.
-const co = await client.createBillingCheckout({ amount_eur: 20 });
+// Top-up: 1 EUR = 100 credits (1 credit = 1 EUR-cent), crediting happens in
+// the webhook once paid. Small overdraft allowed: POST /jobs returns
+// 402 insufficient_credits only once the floor is reached.
+const co = await client.createBillingCheckout({ amount_eur: 20 }); // → 2000 credits
 openBrowser(co.checkout_url);
 ```
 

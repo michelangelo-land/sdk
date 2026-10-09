@@ -124,10 +124,10 @@ describe("projects", () => {
 });
 
 describe("billing", () => {
-  it("createBillingCheckout returns the 201 session", async () => {
+  it("createBillingCheckout returns the 201 session (1 EUR = 100 credits)", async () => {
     const fetchFn = stubFetch(() =>
       json(
-        { session_id: "cs_1", checkout_url: "https://checkout/x", amount_cents: 2000, credits: 20, currency: "eur" },
+        { session_id: "cs_1", checkout_url: "https://checkout/x", amount_cents: 2000, credits: 2000, currency: "eur" },
         201,
       ),
     );
@@ -135,7 +135,22 @@ describe("billing", () => {
     client.auth.setSession({ access_token: "t" });
     const co = await client.createBillingCheckout({ amount_eur: 20 });
     assert.equal(co.session_id, "cs_1");
-    assert.equal(co.credits, 20);
+    assert.equal(co.credits, 2000);
+    assert.equal(co.amount_cents, 2000);
+  });
+
+  it("createJob surfaces 402 insufficient_credits", async () => {
+    const fetchFn = stubFetch(() =>
+      json({ code: "insufficient_credits", message: "top up" }, 402),
+    );
+    const client = new MichelangeloClient({ fetchFn });
+    client.auth.setSession({ access_token: "t" });
+    await assert.rejects(client.createJob({ type: "prompt", input: { prompt: "x" } }), (err: unknown) => {
+      assert.ok(err instanceof MichelangeloApiError && err.status === 402);
+      assert.ok((err as MichelangeloApiError).isInsufficientCredits());
+      assert.equal((err as MichelangeloApiError).code, "insufficient_credits");
+      return true;
+    });
   });
 });
 

@@ -264,20 +264,35 @@ describe("wallets + usage", () => {
   it("getMyWallet and listMyTransactions paginate", async () => {
     const fetchFn = stubFetch((url) => {
       const u = String(url);
-      if (u.endsWith("/wallets/me")) return json({ balance: 10, bonus_balance: 0, total: 10 });
+      if (u.endsWith("/wallets/me")) {
+        return json({
+          balance: 1010,
+          bonus_balance: 0,
+          bonus_expires_at: null,
+          total: 1010,
+          currency: "eur",
+          balance_eur: "10.10",
+          display_balance: "10,10 €",
+          display_total: "10,10 €",
+        });
+      }
       if (u.includes("/wallets/me/transactions")) {
         const parsed = new URL(u);
         if (parsed.searchParams.get("cursor") === "c1") {
-          return json({ data: [{ id: "t2" }], next_cursor: null });
+          return json({ data: [{ id: "t2", metadata: { display_cost: "1,05 €" } }], next_cursor: null });
         }
-        return json({ data: [{ id: "t1" }], next_cursor: "c1" });
+        return json({ data: [{ id: "t1", metadata: { display_cost: "0,50 €" } }], next_cursor: "c1" });
       }
       throw new Error(`unexpected ${u}`);
     });
     const client = authed(fetchFn);
-    assert.equal((await client.getMyWallet()).total, 10);
+    const wallet = await client.getMyWallet();
+    assert.equal(wallet.total, 1010);
+    assert.equal(wallet.display_total, "10,10 €");
+    assert.equal(wallet.balance_eur, "10.10");
     const page = await client.listMyTransactions({ limit: 1 });
     assert.equal(page.data[0]?.id, "t1");
+    assert.equal((page.data[0]?.metadata as Record<string, unknown>)?.display_cost, "0,50 €");
     const all = await client.listAllMyTransactions({ limit: 1 });
     assert.deepEqual(all.map((t) => t.id), ["t1", "t2"]);
   });
