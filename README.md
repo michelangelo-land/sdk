@@ -60,28 +60,29 @@ npm run example:node-login
 | jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay) | Bearer required |
 | jobs | `uploadJobAttachments` `POST /jobs/attachments` (multipart, ≤3 images) | `client.uploadJobAttachments({ files, idempotencyKey })` or `FormData` | Bearer required |
 | jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
-| projects | `listProjects` `GET /projects` | `client.listProjects()` / `client.listAllProjects()` | Bearer required |
+| projects | `listProjects` `GET /projects` | `client.listProjects({ visibility: "all", q })` / `client.listAllProjects()` | Bearer required |
 | projects | `createProject` `POST /projects` | `client.createProject({ name })` → 201 | Bearer required |
 | projects | `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |
-| projects | `updateProject` `PATCH /projects/{id}` | `client.updateProject(id, { name, shared, icon_url })` | Bearer required |
+| projects | `updateProject` `PATCH /projects/{id}` | `client.updateProject(id, { name, shared })` (icon is server-managed via `…/icon`) | Bearer required |
 | projects | `deleteProject` `DELETE /projects/{id}` | `client.deleteProject()` → void (204) | Bearer required |
 | projects | `listProjectFiles` `GET /projects/{id}/files` | `client.listProjectFiles(id, { type: "CODE" })` | Bearer required |
 | projects | `saveProjectFiles` `PUT /projects/{id}/files` | `client.saveProjectFiles(id, { files })` | Bearer required |
-| projects | `generateProjectIcon` `POST /projects/{id}/icon` | `client.generateProjectIcon()` | Bearer required |
-| projects | `reshareProject` `POST /projects/{id}/reshare` | `client.reshareProject(id, { platform })` | Bearer required |
-| projects | `listPreviewErrors` `GET /projects/{id}/preview-errors` | `client.listPreviewErrors(id, { consume })` | Bearer required |
+| projects | `generateProjectIcon` `POST /projects/{id}/icon` | `client.generateProjectIcon()` → `{ icon_url }` | Bearer required |
+| projects | `pushProjectToGithub` `POST /projects/{id}/pushes` | `client.pushProjectToGithub(id)` → `{ pushed, commit_sha }` (sync, no polling) | Bearer required |
+| projects | `reshareProject` `POST /projects/{id}/reshares` | `client.reshareProject(id, { platform })` | Bearer required |
+| projects | `listPreviewErrors` `GET /projects/{id}/preview-errors` | `client.listPreviewErrors(id)` (pure read) | Bearer required |
+| projects | `drainPreviewErrors` `DELETE /projects/{id}/preview-errors` | `client.drainPreviewErrors(id)` → `{ deleted_count }` | Bearer required |
 | projects | `getProjectSupabaseLink` `GET /projects/{id}/supabase-link` | `client.getProjectSupabaseLink()` | Bearer required |
-| explore | `listExploreProjects` `GET /explore/projects` | `client.listExploreProjects({ q })` / `client.listAllExploreProjects()` | Bearer required |
 | moderation | `createReport` `POST /reports` | `client.createReport()` → 201 | Bearer required |
 | moderation | `blockUser` `POST /blocks` | `client.blockUser({ blocked_id })` | Bearer required |
 | github | `exchangeGithubToken` `POST /github/token` | `client.exchangeGithubToken({ code })` | Bearer required |
 | github | `listGithubInstallations` / `saveGithubInstallation` | `client.listGithubInstallations()` / `client.saveGithubInstallation({ id, ghu })` | Bearer required |
 | github | `listGithubRepositories` / `linkGithubRepository` | `client.listGithubRepositories()` / `client.linkGithubRepository()` | Bearer required |
-| github | `unlinkGithubRepository` `DELETE /github/repositories` | `client.unlinkGithubRepository(project_id)` → void (204) | Bearer required |
-| integrations | `startSupabaseOAuth` `POST /integrations/supabase/login` | `client.startSupabaseOAuth({ code_challenge })` → open `authorize_url` | Bearer required |
+| github | `unlinkGithubRepository` `DELETE /github/repositories/{projectId}` | `client.unlinkGithubRepository(project_id)` → void (204) | Bearer required |
+| integrations | `createSupabaseAuthorization` `POST /integrations/supabase/authorizations` | `client.createSupabaseAuthorization({ code_challenge })` → open `authorize_url` | Bearer required |
 | integrations | `listSupabaseProjects` `GET /integrations/supabase/projects` | `client.listSupabaseProjects()` | Bearer required |
 | integrations | `linkSupabaseProject` `POST /integrations/supabase/links` | `client.linkSupabaseProject({ project_id, supabase_ref })` | Bearer required |
-| integrations | `unlinkSupabaseProject` `DELETE /integrations/supabase/links` | `client.unlinkSupabaseProject(project_id)` → void (204) | Bearer required |
+| integrations | `unlinkSupabaseProject` `DELETE /integrations/supabase/links/{projectId}` | `client.unlinkSupabaseProject(project_id)` → void (204) | Bearer required |
 | integrations | `getSupabaseConnection` `GET /integrations/supabase/connection` | `client.getSupabaseConnection()` | Bearer required |
 | wallets | `getMyWallet` `GET /wallets/me` | `client.getMyWallet()` | Bearer required |
 | wallets | `listMyTransactions` `GET /wallets/me/transactions` | `client.listMyTransactions()` / `client.listAllMyTransactions()` | Bearer required |
@@ -93,8 +94,22 @@ npm run example:node-login
 | notifications | `markNotificationRead` `PATCH /notifications/{id}` | `client.markNotificationRead(id)` | Bearer required |
 | notifications | `markAllNotificationsRead` `PATCH /notifications` | `client.markAllNotificationsRead()` → `{ updated_count }` | Bearer required |
 | notifications | `registerPushToken` `POST /push-tokens` | `client.registerPushToken({ token, device_type })` → 201 | Bearer required |
-| notifications | `removePushToken` `DELETE /push-tokens` | `client.removePushToken(token)` → void (204) | Bearer required |
+| notifications | `removePushToken` `DELETE /push-tokens/{token}` | `client.removePushToken(token)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
+
+> Migration notes (0.7.0): `GET /explore/projects` was removed — community
+> search is `listProjects({ visibility: "all", q })` (`listExploreProjects*`
+> remain as deprecated shims). `POST /integrations/supabase/login` was renamed
+> to `POST /integrations/supabase/authorizations`
+> (`createSupabaseAuthorization()`; `startSupabaseOAuth()` still works as a
+> deprecated alias). `POST /jobs` is prompt-only — GitHub pushes are the sync
+> `pushProjectToGithub()` (`POST …/pushes`), not a queued job. `PATCH
+> /projects/{id}` no longer accepts `icon_url`, `GET …/preview-errors` lost
+> `?consume=true` (use `drainPreviewErrors()`), `POST …/reshare` is now
+> `POST …/reshares`, and the three DELETEs take a path id
+> (`/github/repositories/{id}`, `/integrations/supabase/links/{id}`,
+> `/push-tokens/{token}`) instead of a query/body. Job input `appName` is now
+> `app_name` (both accepted by the client types, `app_name` is canonical).
 
 Not covered on purpose: `getOpenApiDocument`/`getDocs` (meta) and
 `handleBillingWebhook` (Stripe-signed server hook) / `handleGithubWebhook`
@@ -109,9 +124,10 @@ const done = await client.waitForJob(job.id, {
 });
 if (done.status !== "succeeded") throw new Error(done.error?.message ?? done.status);
 
-// GitHub push job (project must be linked first):
+// GitHub push (project must be linked first) — sync, no polling:
 await client.linkGithubRepository({ project_id: 12, github_installation_id: 34 });
-const push = await client.createJob({ type: "github-push", project_id: 12 });
+const push = await client.pushProjectToGithub(12);
+if (!push.pushed) console.log("nothing to push", push.commit_sha);
 
 // Prompt with images: upload first, then attach the manifest.
 const manifest = await client.uploadJobAttachments({ files: [imageBlob] });
@@ -126,13 +142,13 @@ await client.createJob({
   supabase_project_ref: "abcxyz",
 });
 
-// Author of a project (explore feed shows the `author` embed; `user_id` for the full hero):
+// Author of a project (community cards show the `author` embed; `user_id` for the full hero):
 const author = project.author; // { username, avatar_url } | null
 const hero = await client.getPublicProfile(project.user_id!);
 
-// Community feed: every page, one array.
+// Community feed: every page, one array (`visibility: "all"` + `q` search).
 const projects = await client.listAllProjects({ visibility: "all" });
-const feed = await client.listAllExploreProjects({ q: "timer" });
+const feed = await client.listAllProjects({ visibility: "all", q: "timer" });
 
 // Files round-trip + reshare + icon:
 await client.saveProjectFiles(12, { files: [{ path: "App.tsx", contents: "...", type: "CODE" }] });

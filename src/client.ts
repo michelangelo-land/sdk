@@ -13,6 +13,9 @@ import type {
   CreateJobRequest,
   CreateProjectRequest,
   CreateReportRequest,
+  CreateSupabaseAuthorizationRequest,
+  CreateSupabaseAuthorizationResponse,
+  DrainPreviewErrorsResponse,
   ExchangeGithubTokenRequest,
   ExchangeGithubTokenResponse,
   GenerateIconResponse,
@@ -21,6 +24,7 @@ import type {
   GetUsageSummaryOptions,
   GithubInstallation,
   GithubInstallationsPage,
+  GithubPushResult,
   GithubRepositoriesPage,
   GithubRepository,
   HealthResponse,
@@ -277,7 +281,7 @@ export class MichelangeloClient {
   /**
    * `GET /users/{userId}` — public profile by id (`id, username, avatar_url,
    * is_supporter, created_at, updated_at`). Any authenticated caller can read
-   * any profile (explore feed / preview / user screens). Pairs with the
+   * any profile (community feed / preview / user screens). Pairs with the
    * `author` embed on `Project`.
    */
   getPublicProfile(userId: string): Promise<PublicProfile> {
@@ -287,8 +291,9 @@ export class MichelangeloClient {
   /**
    * `POST /jobs` — creates the row (`status: queued`) and returns it
    * immediately (HTTP 202; 200 on idempotent replay). Poll `getJob` /
-   * `waitForJob` for progress. `type: "prompt"` for generations,
-   * `type: "github-push"` to push a linked project to GitHub.
+   * `waitForJob` for progress. Prompt-only: GitHub pushes moved to the
+   * synchronous `POST /projects/{projectId}/pushes`
+   * (`pushProjectToGithub`), not a queued job.
    * 402 `insufficient_credits` when the overdraft floor is reached — top up
    * via `createBillingCheckout`. Small overdraft is allowed: a user with
    * 1 cent still runs and goes negative, the next top-up absorbs the red.
@@ -348,13 +353,16 @@ export class MichelangeloClient {
 
   /**
    * `GET /projects` — page of projects (`mine` by default, `all` for the
-   * community view). `next_cursor` feeds the next call's `cursor`.
+   * community view). `next_cursor` feeds the next call's `cursor`. Pass `q`
+   * for full-text search via RPC `match_project` (RLS still applies) — this
+   * replaces the removed `GET /explore/projects` endpoint.
    */
   listProjects(options: ListProjectsOptions = {}): Promise<ProjectPage> {
     const params = new URLSearchParams();
     params.set("limit", String(options.limit ?? 20));
     params.set("visibility", options.visibility ?? "mine");
     if (options.cursor !== undefined) params.set("cursor", options.cursor);
+    if (options.q !== undefined) params.set("q", options.q);
     return this.request<ProjectPage>(`/projects?${params.toString()}`);
   }
 
@@ -371,6 +379,7 @@ export class MichelangeloClient {
       const res = await this.listProjects({
         limit,
         visibility: options.visibility,
+        ...(options.q !== undefined ? { q: options.q } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
       });
       all.push(...res.data);
@@ -394,7 +403,7 @@ export class MichelangeloClient {
     return this.request<Project>(`/projects/${encodeURIComponent(String(projectId))}`);
   }
 
-  /** `PATCH /projects/{projectId}` — rename / share / set icon (owner only). */
+  /** `PATCH /projects/{projectId}` — rename / share (owner only). */
   updateProject(projectId: number, input: UpdateProjectRequest): Promise<Project> {
     return this.request<Project>(`/projects/${encodeURIComponent(String(projectId))}`, {
       method: "PATCH",
@@ -443,27 +452,58 @@ export class MichelangeloClient {
   }
 
   /**
-   * `POST /projects/{projectId}/reshare` — republish / share. Duplicate
+   * `POST /projects/{projectId}/reshares` — republish / share. Duplicate
    * (same project+user+platform) → 200 with `deduped:true`.
    */
   reshareProject(projectId: number, input: ReshareRequest): Promise<ReshareResponse> {
     return this.request<ReshareResponse>(
-      `/projects/${encodeURIComponent(String(projectId))}/reshare`,
+      `/projects/${encodeURIComponent(String(projectId))}/reshares`,
       { method: "POST", body: input },
     );
   }
 
   /**
-   * `GET /projects/{projectId}/preview-errors` — preview errors (max 10,
-   * oldest first). Pass `{ consume: true }` to also delete the returned rows.
+   * `POST /projects/{projectId}/pushes` — push a GitHub-linked project
+   * (Snack bundle → GitHub, same edge the app used to call directly).
+   * Synchronous: returns 201 `{ pushed, commit_sha }` — no polling needed.
+   * Replaces the removed `type: "github-push"` job variant.
    */
-  listPreviewErrors(
+  pushProjectToGithub(projectId: number): Promise<GithubPushResult> {
+    return this.request<GithubPushResult>(
+      `/projects/${encodeURIComponent(String(projectId))}/pushes`,
+      { method: "POST", body: {} },
+    );
+  }
+
+  /**
+   * `GET /projects/{projectId}/preview-errors` — preview errors (max 10,
+   * oldest first). Pure read — never mutates. To drain after rendering,
+   * call `drainPreviewErrors()`.
+   */
+  async listPreviewErrors(
     projectId: number,
     options: ListPreviewErrorsOptions = {},
   ): Promise<PreviewErrorsPage> {
-    const query = options.consume === true ? "?consume=true" : "";
-    return this.request<PreviewErrorsPage>(
-      `/projects/${encodeURIComponent(String(projectId))}/preview-errors${query}`,
+    const page = await this.request<PreviewErrorsPage>(
+      `/projects/${encodeURIComponent(String(projectId))}/preview-errors`,
+    );
+    // Backwards compatibility for the removed `?consume=true` query:
+    // list, then drain, then return the listed rows.
+    if (options.consume === true) {
+      await this.drainPreviewErrors(projectId);
+    }
+    return page;
+  }
+
+  /**
+   * `DELETE /projects/{projectId}/preview-errors` — delete all preview
+   * errors of the project (what the app did with `?consume=true`).
+   * Idempotent; returns `{ deleted_count }`.
+   */
+  drainPreviewErrors(projectId: number): Promise<DrainPreviewErrorsResponse> {
+    return this.request<DrainPreviewErrorsResponse>(
+      `/projects/${encodeURIComponent(String(projectId))}/preview-errors`,
+      { method: "DELETE" },
     );
   }
 
@@ -478,44 +518,24 @@ export class MichelangeloClient {
   }
 
   /**
-   * `GET /explore/projects` — community discover feed (`shared=true` ordered
-   * by `updated_at` desc). Optional `q` runs full-text search via RPC
-   * `match_project`.
+   * @deprecated `GET /explore/projects` was removed from the API — community
+   * search now lives on `GET /projects` (`visibility: "all"` + `q`). This
+   * shim delegates to `listProjects` with `visibility: "all"` so existing
+   * call-sites keep working; migrate to `listProjects({ visibility: "all", q })`.
    */
   listExploreProjects(options: ListExploreProjectsOptions = {}): Promise<ProjectPage> {
-    const params = new URLSearchParams();
-    params.set("limit", String(options.limit ?? 20));
-    if (options.cursor !== undefined) params.set("cursor", options.cursor);
-    if (options.q !== undefined) params.set("q", options.q);
-    return this.request<ProjectPage>(`/explore/projects?${params.toString()}`);
+    return this.listProjects({ ...options, visibility: "all" });
   }
 
   /**
-   * Fetch every explore page (`next_cursor` chaining) into one array.
-   * Stops after `maxPages` (default 50) to guard against a stuck cursor.
+   * @deprecated Alias of `listAllProjects` with `visibility: "all"`
+   * (see `listExploreProjects`). Migrate to
+   * `listAllProjects({ visibility: "all", q })`.
    */
   async listAllExploreProjects(
     options: ListExploreProjectsOptions & { maxPages?: number } = {},
   ): Promise<Project[]> {
-    const limit = options.limit ?? 100;
-    const maxPages = options.maxPages ?? 50;
-    const all: Project[] = [];
-    let cursor: string | undefined = options.cursor;
-    for (let page = 0; page < maxPages; page++) {
-      const res = await this.listExploreProjects({
-        limit,
-        ...(cursor !== undefined ? { cursor } : {}),
-        ...(options.q !== undefined ? { q: options.q } : {}),
-      });
-      all.push(...res.data);
-      if (!res.next_cursor) return all;
-      cursor = res.next_cursor;
-    }
-    throw new MichelangeloApiError({
-      status: 0,
-      code: "too_many_pages",
-      message: `listAllExploreProjects stopped after ${maxPages} pages`,
-    });
+    return this.listAllProjects({ ...options, visibility: "all" });
   }
 
   /** `POST /reports` — report content (at least one target required). */
@@ -566,24 +586,37 @@ export class MichelangeloClient {
   }
 
   /**
-   * `DELETE /github/repositories?project_id=` — unlink repo from a project.
+   * `DELETE /github/repositories/{projectId}` — unlink repo from a project.
    * Idempotent; resolves void on HTTP 204.
    */
   async unlinkGithubRepository(projectId: number): Promise<void> {
-    const query = new URLSearchParams({ project_id: String(projectId) }).toString();
-    await this.request<void>(`/github/repositories?${query}`, { method: "DELETE" });
+    await this.request<void>(`/github/repositories/${encodeURIComponent(String(projectId))}`, {
+      method: "DELETE",
+    });
   }
 
   /**
-   * `POST /integrations/supabase/login` — start Supabase-account OAuth.
+   * `POST /integrations/supabase/authorizations` — start Supabase-account OAuth.
    * Open `authorize_url` via `openAuthSessionAsync`; the edge deep-links back
    * to `michelangelo://supabase-connected` (tokens stay server-side).
    */
+  createSupabaseAuthorization(
+    input: CreateSupabaseAuthorizationRequest,
+  ): Promise<CreateSupabaseAuthorizationResponse> {
+    return this.request<CreateSupabaseAuthorizationResponse>(
+      "/integrations/supabase/authorizations",
+      { method: "POST", body: input },
+    );
+  }
+
+  /**
+   * @deprecated The endpoint was renamed to
+   * `POST /integrations/supabase/authorizations` in the swagger
+   * (`createSupabaseAuthorization`). This shim delegates there; migrate to
+   * `createSupabaseAuthorization()`.
+   */
   startSupabaseOAuth(input: StartSupabaseOAuthRequest): Promise<StartSupabaseOAuthResponse> {
-    return this.request<StartSupabaseOAuthResponse>("/integrations/supabase/login", {
-      method: "POST",
-      body: input,
-    });
+    return this.createSupabaseAuthorization(input);
   }
 
   /**
@@ -603,12 +636,14 @@ export class MichelangeloClient {
   }
 
   /**
-   * `DELETE /integrations/supabase/links?project_id=` — unlink app ↔ Supabase ref.
+   * `DELETE /integrations/supabase/links/{projectId}` — unlink app ↔ Supabase ref.
    * Idempotent; resolves void on HTTP 204.
    */
   async unlinkSupabaseProject(projectId: number): Promise<void> {
-    const query = new URLSearchParams({ project_id: String(projectId) }).toString();
-    await this.request<void>(`/integrations/supabase/links?${query}`, { method: "DELETE" });
+    await this.request<void>(
+      `/integrations/supabase/links/${encodeURIComponent(String(projectId))}`,
+      { method: "DELETE" },
+    );
   }
 
   /** `GET /integrations/supabase/connection` — connection state (safe columns). */
@@ -731,12 +766,14 @@ export class MichelangeloClient {
   }
 
   /**
-   * `DELETE /push-tokens` — remove a token (body `{ token }`, mirrors the
-   * logout path). Resolves void on HTTP 204.
+   * `DELETE /push-tokens/{token}` — remove a token (`token` URL-encoded,
+   * e.g. `ExponentPushToken%5Bx%5D`, mirrors the logout path). Idempotent:
+   * 204 even when the token does not exist. Accepts the raw token string or
+   * the legacy `{ token }` object form.
    */
   async removePushToken(input: RemovePushTokenRequest | string): Promise<void> {
-    const body: RemovePushTokenRequest = typeof input === "string" ? { token: input } : input;
-    await this.request<void>("/push-tokens", { method: "DELETE", body });
+    const token = typeof input === "string" ? input : input.token;
+    await this.request<void>(`/push-tokens/${encodeURIComponent(token)}`, { method: "DELETE" });
   }
 
   /**

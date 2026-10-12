@@ -83,15 +83,38 @@ describe("users (new)", () => {
 });
 
 describe("jobs (new)", () => {
-  it("createJob supports the github-push variant", async () => {
+  it("createJob is prompt-only (github-push moved to pushProjectToGithub)", async () => {
     let body: unknown = null;
     const fetchFn = stubFetch(async (_url, init) => {
       body = JSON.parse(String(init?.body));
-      return json({ id: "j-2", type: "github-push", status: "queued", created_at: "x" }, 202);
+      return json({ id: "j-2", type: "prompt", status: "queued", created_at: "x" }, 202);
     });
-    const job = await authed(fetchFn).createJob({ type: "github-push", project_id: 12 });
-    assert.equal(job.type, "github-push");
-    assert.deepEqual(body, { type: "github-push", project_id: 12 });
+    const job = await authed(fetchFn).createJob({
+      type: "prompt",
+      input: { prompt: "hi" },
+      live_activity_token: "lat",
+      supabase_project_ref: "ref",
+    });
+    assert.equal(job.type, "prompt");
+    assert.deepEqual(body, {
+      type: "prompt",
+      input: { prompt: "hi" },
+      live_activity_token: "lat",
+      supabase_project_ref: "ref",
+    });
+  });
+
+  it("pushProjectToGithub POSTs /projects/{id}/pushes (sync, no polling)", async () => {
+    let seen = "";
+    const fetchFn = stubFetch((url, init) => {
+      seen = String(url);
+      assert.equal(init?.method, "POST");
+      return json({ pushed: true, commit_sha: "abc123", message: null }, 201);
+    });
+    const out = await authed(fetchFn).pushProjectToGithub(12);
+    assert.equal(out.pushed, true);
+    assert.equal(out.commit_sha, "abc123");
+    assert.ok(seen.endsWith("/v1/projects/12/pushes"), seen);
   });
 
   it("uploadJobAttachments sends files + idempotency_key as multipart", async () => {
@@ -151,42 +174,66 @@ describe("projects (new)", () => {
     assert.equal(saved.data.length, 1);
   });
 
-  it("icon / reshare / preview-errors / supabase-link", async () => {
+  it("icon / reshare / preview-errors / drain / supabase-link", async () => {
     const fetchFn = stubFetch((url, init) => {
       const u = String(url);
       if (u.endsWith("/icon")) {
         assert.equal(init?.method, "POST");
         return json({ icon_url: "https://cdn/i.png" });
       }
-      if (u.endsWith("/reshare")) {
+      if (u.endsWith("/reshares")) {
         assert.deepEqual(JSON.parse(String(init?.body)), { platform: "x" });
-        return json({ deduped: false }, 201);
+        return json({ project_id: 12, reshared_by_user_id: "u", platform: "x" }, 201);
       }
-      if (u.includes("/preview-errors")) {
-        assert.ok(u.endsWith("?consume=true"), u);
+      if (u.endsWith("/preview-errors") && (init?.method ?? "GET") === "GET") {
+        assert.ok(!u.includes("consume"), u);
         return json({ data: [{ id: "e1", message: "boom" }] });
+      }
+      if (u.endsWith("/preview-errors") && init?.method === "DELETE") {
+        return json({ deleted_count: 2 });
       }
       assert.ok(u.endsWith("/supabase-link"), u);
       return json({ project_id: 12, supabase_project_ref: "ref" });
     });
     const client = authed(fetchFn);
     assert.equal((await client.generateProjectIcon(12)).icon_url, "https://cdn/i.png");
-    assert.deepEqual(await client.reshareProject(12, { platform: "x" }), { deduped: false });
-    assert.equal((await client.listPreviewErrors(12, { consume: true })).data[0]?.id, "e1");
+    assert.deepEqual(await client.reshareProject(12, { platform: "x" }), {
+      project_id: 12,
+      reshared_by_user_id: "u",
+      platform: "x",
+    });
+    assert.equal((await client.listPreviewErrors(12)).data[0]?.id, "e1");
+    assert.equal((await client.drainPreviewErrors(12)).deleted_count, 2);
     assert.equal((await client.getProjectSupabaseLink(12)).supabase_project_ref, "ref");
+  });
+
+  it("listPreviewErrors({ consume: true }) lists then drains (legacy shim)", async () => {
+    const calls: string[] = [];
+    const fetchFn = stubFetch((url, init) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (init?.method === "DELETE") return json({ deleted_count: 1 });
+      return json({ data: [{ id: "e1", message: "boom" }] });
+    });
+    const page = await authed(fetchFn).listPreviewErrors(12, { consume: true });
+    assert.equal(page.data[0]?.id, "e1");
+    assert.deepEqual(calls, [
+      "GET https://api.michelangelo.land/v1/projects/12/preview-errors",
+      "DELETE https://api.michelangelo.land/v1/projects/12/preview-errors",
+    ]);
   });
 });
 
-describe("explore + moderation", () => {
-  it("listExploreProjects encodes limit/cursor/q and listAll chains", async () => {
+describe("projects search + moderation", () => {
+  it("listProjects encodes limit/cursor/visibility/q and listAll chains q", async () => {
     let seenUrl = "";
     const single = stubFetch((url) => {
       seenUrl = url;
       return json({ data: [], next_cursor: null });
     });
-    await authed(single).listExploreProjects({ limit: 5, q: "timer", cursor: "c0" });
+    await authed(single).listProjects({ limit: 5, visibility: "all", q: "timer", cursor: "c0" });
     const u = new URL(seenUrl);
     assert.equal(u.searchParams.get("q"), "timer");
+    assert.equal(u.searchParams.get("visibility"), "all");
     assert.equal(u.searchParams.get("limit"), "5");
     assert.equal(u.searchParams.get("cursor"), "c0");
 
@@ -195,8 +242,21 @@ describe("explore + moderation", () => {
       { data: [{ id: 2, name: "b", created_at: "x" }], next_cursor: null },
     ];
     const paged = stubFetch(() => json(pages.shift()));
-    const all = await authed(paged).listAllExploreProjects();
+    const all = await authed(paged).listAllProjects({ visibility: "all", q: "timer" });
     assert.deepEqual(all.map((p) => p.id), [1, 2]);
+  });
+
+  it("listExploreProjects shim delegates to /projects with visibility=all", async () => {
+    let seenUrl = "";
+    const fetchFn = stubFetch((url) => {
+      seenUrl = String(url);
+      return json({ data: [], next_cursor: null });
+    });
+    await authed(fetchFn).listExploreProjects({ q: "timer" });
+    const u = new URL(seenUrl);
+    assert.ok(u.pathname.endsWith("/v1/projects"), seenUrl);
+    assert.equal(u.searchParams.get("visibility"), "all");
+    assert.equal(u.searchParams.get("q"), "timer");
   });
 
   it("createReport POSTs /reports and blockUser POSTs /blocks", async () => {
@@ -236,26 +296,32 @@ describe("github + supabase integrations", () => {
     assert.equal((await client.linkGithubRepository({ project_id: 1, github_installation_id: 7 })).project_id, 1);
   });
 
-  it("supabase login/projects/link/connection", async () => {
+  it("supabase authorizations/projects/link/connection", async () => {
     const fetchFn = stubFetch((url, init) => {
       const u = String(url);
-      if (u.endsWith("/integrations/supabase/login")) {
+      if (u.endsWith("/integrations/supabase/authorizations")) {
         assert.deepEqual(JSON.parse(String(init?.body)), { code_challenge: "ch" });
         return json({ authorize_url: "https://x/auth", return_url: "michelangelo://supabase-connected" });
       }
       if (u.endsWith("/integrations/supabase/projects")) return json({ projects: [] });
       if (u.endsWith("/integrations/supabase/links")) {
         assert.equal(init?.method, "POST");
-        return json({ linked: true }, 201);
+        return json({ project_id: 1, ref: "ref" }, 201);
       }
       assert.ok(u.endsWith("/integrations/supabase/connection"), u);
       return json({ connected: false });
     });
     const client = authed(fetchFn);
-    const login = await client.startSupabaseOAuth({ code_challenge: "ch" });
-    assert.ok(login.authorize_url.startsWith("https://"));
+    const auth = await client.createSupabaseAuthorization({ code_challenge: "ch" });
+    assert.ok(auth.authorize_url.startsWith("https://"));
+    // deprecated alias delegates to the renamed endpoint
+    const legacy = await client.startSupabaseOAuth({ code_challenge: "ch" });
+    assert.ok(legacy.authorize_url.startsWith("https://"));
     assert.deepEqual(await client.listSupabaseProjects(), { projects: [] });
-    assert.deepEqual(await client.linkSupabaseProject({ project_id: 1, supabase_ref: "ref" }), { linked: true });
+    assert.deepEqual(await client.linkSupabaseProject({ project_id: 1, supabase_ref: "ref" }), {
+      project_id: 1,
+      ref: "ref",
+    });
     assert.equal((await client.getSupabaseConnection()).connected, false);
   });
 });
@@ -318,7 +384,7 @@ describe("wallets + usage", () => {
 
 describe("notifications + push tokens", () => {
   it("list/getUnread/markRead/register/remove", async () => {
-    let deleteBody: unknown = null;
+    let deleteUrl = "";
     const fetchFn = stubFetch((url, init) => {
       const u = String(url);
       const method = init?.method ?? "GET";
@@ -330,10 +396,11 @@ describe("notifications + push tokens", () => {
       }
       if (u.endsWith("/push-tokens") && method === "POST") {
         assert.deepEqual(JSON.parse(String(init?.body)), { token: "ExponentPushToken[x]", device_type: "ios" });
-        return json({ ok: true }, 201);
+        return json({ token: "ExponentPushToken[x]", device_type: "ios" }, 201);
       }
-      if (u.endsWith("/push-tokens") && method === "DELETE") {
-        deleteBody = JSON.parse(String(init?.body));
+      if (u.includes("/push-tokens/") && method === "DELETE") {
+        deleteUrl = u;
+        assert.equal(init?.body, undefined);
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected ${method} ${u}`);
@@ -342,12 +409,13 @@ describe("notifications + push tokens", () => {
     assert.equal((await client.listNotifications()).data[0]?.id, "n1");
     assert.equal((await client.getUnreadCount()).unread_count, 2);
     assert.equal((await client.markNotificationRead("n1")).is_read, true);
-    await client.registerPushToken({ token: "ExponentPushToken[x]", device_type: "ios" });
+    const reg = await client.registerPushToken({ token: "ExponentPushToken[x]", device_type: "ios" });
+    assert.equal(reg.token, "ExponentPushToken[x]");
     assert.equal(await client.removePushToken("ExponentPushToken[x]"), undefined);
-    assert.deepEqual(deleteBody, { token: "ExponentPushToken[x]" });
+    assert.ok(deleteUrl.endsWith("/push-tokens/ExponentPushToken%5Bx%5D"), deleteUrl);
     // object form as well
     await client.removePushToken({ token: "ExponentPushToken[y]" });
-    assert.deepEqual(deleteBody, { token: "ExponentPushToken[y]" });
+    assert.ok(deleteUrl.endsWith("/push-tokens/ExponentPushToken%5By%5D"), deleteUrl);
   });
 
   it("markAllNotificationsRead PATCHes /notifications with { is_read: true }", async () => {
@@ -378,7 +446,7 @@ describe("github + supabase unlink", () => {
     assert.deepEqual(body, { id: 11, ghu: "ghu_x", login: "octo" });
   });
 
-  it("unlinkGithubRepository DELETEs with project_id and resolves void on 204", async () => {
+  it("unlinkGithubRepository DELETEs /github/repositories/{id} and resolves void on 204", async () => {
     let seen = "";
     const fetchFn = stubFetch((url, init) => {
       seen = String(url);
@@ -386,11 +454,10 @@ describe("github + supabase unlink", () => {
       return new Response(null, { status: 204 });
     });
     assert.equal(await authed(fetchFn).unlinkGithubRepository(12), undefined);
-    assert.ok(seen.includes("/v1/github/repositories?"), seen);
-    assert.ok(seen.includes("project_id=12"), seen);
+    assert.ok(seen.endsWith("/v1/github/repositories/12"), seen);
   });
 
-  it("unlinkSupabaseProject DELETEs with project_id and resolves void on 204", async () => {
+  it("unlinkSupabaseProject DELETEs /integrations/supabase/links/{id} and resolves void on 204", async () => {
     let seen = "";
     const fetchFn = stubFetch((url, init) => {
       seen = String(url);
@@ -398,7 +465,6 @@ describe("github + supabase unlink", () => {
       return new Response(null, { status: 204 });
     });
     assert.equal(await authed(fetchFn).unlinkSupabaseProject(7), undefined);
-    assert.ok(seen.includes("/v1/integrations/supabase/links?"), seen);
-    assert.ok(seen.includes("project_id=7"), seen);
+    assert.ok(seen.endsWith("/v1/integrations/supabase/links/7"), seen);
   });
 });

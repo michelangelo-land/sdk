@@ -38,7 +38,13 @@ export interface JobInput {
   prompt: string;
   /** Vendor-neutral tier; server-enriched from prompt evaluation when absent. */
   model?: JobTier;
-  /** Generated app name (first generation only); server-enriched when absent. */
+  /** Generated app name (first generation only, snake_case); server-enriched when absent. */
+  app_name?: string | null;
+  /**
+   * @deprecated Use `app_name` (snake_case, per swagger
+   * `#/components/schemas/CreatePromptJobRequest`). Kept for backwards
+   * compatibility — the server ignores unknown keys.
+   */
   appName?: string | null;
 }
 
@@ -76,8 +82,19 @@ export interface CreateGithubPushJobRequest {
   idempotency_key?: string;
 }
 
-/** `POST /jobs` body — `oneOf` with `type` discriminator. */
-export type CreateJobRequest = CreatePromptJobRequest | CreateGithubPushJobRequest;
+/**
+ * @deprecated The API no longer accepts `type: "github-push"` via `POST /jobs`
+ * (the swagger `CreateGithubPushJobRequest` schema was removed — pushes are now
+ * a synchronous `POST /projects/{projectId}/pushes`, see
+ * `client.pushProjectToGithub`). Kept so existing imports still compile.
+ */
+export type DeprecatedGithubPushJobRequest = CreateGithubPushJobRequest;
+
+/**
+ * `POST /jobs` body — prompt-only since the `github-push` job variant was
+ * removed from the swagger (use `POST /projects/{projectId}/pushes` instead).
+ */
+export type CreateJobRequest = CreatePromptJobRequest;
 
 export interface AttachmentsManifest {
   idempotency_key: string;
@@ -143,6 +160,8 @@ export interface ListProjectsOptions {
   cursor?: string;
   /** `mine` (default): caller's own projects. `all`: plus public/shared. */
   visibility?: ProjectVisibility;
+  /** Full-text query via RPC match_project (RLS still applies). */
+  q?: string;
 }
 
 export interface ListAllProjectsOptions extends Omit<ListProjectsOptions, "cursor"> {
@@ -160,7 +179,6 @@ export interface CreateProjectRequest {
 export interface UpdateProjectRequest {
   name?: string;
   shared?: boolean;
-  icon_url?: string | null;
 }
 
 export interface ProjectFile {
@@ -194,11 +212,34 @@ export interface ReshareRequest {
   share_metadata?: Record<string, unknown>;
 }
 
-/** `POST /projects/{id}/reshare` — free-form row (200 `{deduped:true}` on duplicate). */
-export type ReshareResponse = Record<string, unknown>;
+/** `POST /projects/{id}/reshares` — recorded row (201). */
+export interface ProjectReshare {
+  project_id: number;
+  reshared_by_user_id: string;
+  platform: string;
+  share_metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** Idempotent replay marker — duplicate insert returns 200 `{ deduped: true }`. */
+export interface Deduped {
+  deduped: true;
+}
+
+/**
+ * `POST /projects/{id}/reshares` — recorded row (201) or `{ deduped: true }`
+ * (200 on duplicate project+user+platform).
+ */
+export type ReshareResponse = ProjectReshare | Deduped;
 
 /** `POST /projects/{id}/icon` — proxied generate-project-icon edge result. */
-export type GenerateIconResponse = Record<string, unknown>;
+export interface ProjectIconResult {
+  icon_url?: string;
+  [key: string]: unknown;
+}
+
+/** `POST /projects/{id}/icon` — proxied generate-project-icon edge result. */
+export type GenerateIconResponse = ProjectIconResult;
 
 export interface PreviewError {
   id?: string;
@@ -212,18 +253,30 @@ export interface PreviewErrorsPage {
 }
 
 export interface ListPreviewErrorsOptions {
-  /** Pass true to also delete the returned rows (what the app does after rendering). */
+  /**
+   * @deprecated The `?consume=true` query was removed from
+   * `GET /projects/{id}/preview-errors` (pure read now). Pass `consume: true`
+   * to emulate the old behaviour: list, then `drainPreviewErrors()`, then
+   * return the listed rows. Prefer calling `listPreviewErrors()` +
+   * `drainPreviewErrors()` explicitly.
+   */
   consume?: boolean;
 }
 
-// --- explore → `listExploreProjects`, same `ProjectPage` shape ---
-
-export interface ListExploreProjectsOptions {
-  limit?: number;
-  cursor?: string;
-  /** Full-text query via RPC match_project. */
-  q?: string;
+/** `DELETE /projects/{id}/preview-errors` — drain result. */
+export interface DrainPreviewErrorsResponse {
+  deleted_count: number;
 }
+
+// --- community search now lives on `GET /projects?q=` (the standalone ---
+// --- `GET /explore/projects` endpoint was removed from the swagger) ---
+
+/**
+ * @deprecated `GET /explore/projects` was removed from the API — search now
+ * lives on `GET /projects` (`visibility: "all"` + `q`). Kept so existing
+ * imports still compile; use `ListProjectsOptions` instead.
+ */
+export type ListExploreProjectsOptions = Pick<ListProjectsOptions, "limit" | "cursor" | "q">;
 
 // --- moderation → `createReport`/`blockUser` ---
 
@@ -233,15 +286,37 @@ export interface CreateReportRequest {
   reason?: string;
 }
 
-/** `POST /reports` — free-form `{...}` row. */
-export type ReportResponse = Record<string, unknown>;
+/** `POST /reports` — recorded row (201). */
+export interface Report {
+  id?: string;
+  reporter_id: string;
+  reported_project_id?: number;
+  reported_user_id?: string;
+  reason?: string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+/** `POST /reports` — recorded row. */
+export type ReportResponse = Report;
 
 export interface CreateBlockRequest {
   blocked_id: string;
 }
 
-/** `POST /blocks` — free-form row (200 `deduped:true` on duplicate). */
-export type BlockResponse = Record<string, unknown>;
+/** `POST /blocks` — blocked row (201). */
+export interface Block {
+  blocker_id: string;
+  blocked_id: string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * `POST /blocks` — blocked row (201) or `{ deduped: true }`
+ * (200 on duplicate).
+ */
+export type BlockResponse = Block | Deduped;
 
 // --- github → installations / repositories / token exchange ---
 
@@ -294,20 +369,50 @@ export interface ExchangeGithubTokenResponse {
   access_token: string;
 }
 
+/**
+ * `POST /projects/{projectId}/pushes` — synchronous push of a GitHub-linked
+ * project (Snack bundle → GitHub). Short integration action, not a queued job.
+ */
+export interface GithubPushResult {
+  pushed: boolean;
+  /** Commit SHA created on GitHub (null when nothing pushed). */
+  commit_sha?: string | null;
+  message?: string | null;
+}
+
 // --- integrations/supabase → OAuth login / projects / links / connection ---
 
-export interface StartSupabaseOAuthRequest {
+export interface CreateSupabaseAuthorizationRequest {
   code_challenge: string;
   code_verifier?: string;
 }
 
-export interface StartSupabaseOAuthResponse {
+export interface CreateSupabaseAuthorizationResponse {
   authorize_url: string;
   return_url: string;
 }
 
+/**
+ * @deprecated `POST /integrations/supabase/login` was renamed to
+ * `POST /integrations/supabase/authorizations` in the swagger
+ * (`createSupabaseAuthorization`). Kept so existing imports still compile.
+ */
+export type StartSupabaseOAuthRequest = CreateSupabaseAuthorizationRequest;
+
+/**
+ * @deprecated Alias of `CreateSupabaseAuthorizationResponse` (endpoint rename).
+ */
+export type StartSupabaseOAuthResponse = CreateSupabaseAuthorizationResponse;
+
+/** `GET /integrations/supabase/projects` — edge-proxied projects + organizations. */
+export interface SupabaseProjectsResult {
+  projects: Record<string, unknown>[];
+  organizations?: Record<string, unknown>[];
+  [key: string]: unknown;
+}
+
 /** `GET /integrations/supabase/projects` — edge-proxied `{projects, organizations}`. */
-export type SupabaseProjectsResponse = Record<string, unknown>;
+export type SupabaseProjectsResponse = SupabaseProjectsResult;
 
 export interface SupabaseProjectLink {
   project_id?: number;
@@ -321,8 +426,16 @@ export interface LinkSupabaseProjectRequest {
   supabase_ref: string;
 }
 
+/** `POST /integrations/supabase/links` — linked row + edge result. */
+export interface SupabaseLinkResult {
+  project_id: number;
+  ref?: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
 /** `POST /integrations/supabase/links` — proxied edge result (upserted link). */
-export type LinkSupabaseProjectResponse = Record<string, unknown>;
+export type LinkSupabaseProjectResponse = SupabaseLinkResult;
 
 export interface SupabaseConnection {
   connected: boolean;
@@ -539,8 +652,20 @@ export interface RegisterPushTokenRequest {
   time_zone?: string;
 }
 
-/** `POST /push-tokens` — free-form upsert result. */
-export type RegisterPushTokenResponse = Record<string, unknown>;
+/** `POST /push-tokens` — registered row (upsert on conflict `token`). */
+export interface PushToken {
+  token: string;
+  user_id?: string;
+  device_type?: DeviceType;
+  is_active?: boolean;
+  last_used_at?: string;
+  locale?: string;
+  time_zone?: string;
+  [key: string]: unknown;
+}
+
+/** `POST /push-tokens` — registered row. */
+export type RegisterPushTokenResponse = PushToken;
 
 export interface RemovePushTokenRequest {
   token: string;

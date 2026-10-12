@@ -82,7 +82,7 @@ describe("jobs", () => {
 });
 
 describe("projects", () => {
-  it("listProjects encodes limit/visibility/cursor", async () => {
+  it("listProjects encodes limit/visibility/cursor/q", async () => {
     let seenUrl = "";
     const fetchFn = stubFetch((url) => {
       seenUrl = url;
@@ -90,11 +90,12 @@ describe("projects", () => {
     });
     const client = new MichelangeloClient({ fetchFn });
     client.auth.setSession({ access_token: "t" });
-    await client.listProjects({ limit: 5, visibility: "all", cursor: "2026-01-01T00:00:00Z" });
+    await client.listProjects({ limit: 5, visibility: "all", cursor: "2026-01-01T00:00:00Z", q: "timer" });
     const u = new URL(seenUrl);
     assert.equal(u.searchParams.get("limit"), "5");
     assert.equal(u.searchParams.get("visibility"), "all");
     assert.equal(u.searchParams.get("cursor"), "2026-01-01T00:00:00Z");
+    assert.equal(u.searchParams.get("q"), "timer");
   });
 
   it("listAllProjects chains next_cursor and stops", async () => {
