@@ -90,6 +90,64 @@ describe("auth dynamic flow", () => {
   });
 });
 
+describe("refresh single-flight", () => {
+  it("concurrent refresh() calls share one token request", async () => {
+    let tokenCalls = 0;
+    const fetchFn = stubFetch((url) => {
+      assert.ok(String(url).endsWith("/oauth/token"));
+      tokenCalls += 1;
+      return json({ access_token: `tok-${tokenCalls}`, refresh_token: `ref-${tokenCalls}`, token_type: "Bearer", expires_in: 3600 });
+    });
+    const auth = new AuthManager({ clientId: "c1", fetchFn });
+    auth.setSession({ access_token: "tok-0", refresh_token: "ref-0", expires_in: 3600 });
+    const [a, b, c] = await Promise.all([auth.refresh(), auth.refresh(), auth.refresh()]);
+    assert.equal(tokenCalls, 1);
+    assert.equal(a.accessToken, "tok-1");
+    assert.equal(b.accessToken, "tok-1");
+    assert.equal(c.accessToken, "tok-1");
+    assert.equal(auth.getSession()?.refreshToken, "ref-1");
+  });
+
+  it("a later refresh after settle rotates again", async () => {
+    let tokenCalls = 0;
+    const fetchFn = stubFetch((url) => {
+      assert.ok(String(url).endsWith("/oauth/token"));
+      tokenCalls += 1;
+      return json({ access_token: `tok-${tokenCalls}`, refresh_token: `ref-${tokenCalls}`, token_type: "Bearer", expires_in: 3600 });
+    });
+    const auth = new AuthManager({ clientId: "c1", fetchFn });
+    auth.setSession({ access_token: "tok-0", refresh_token: "ref-0", expires_in: 3600 });
+    await auth.refresh();
+    await auth.refresh();
+    assert.equal(tokenCalls, 2);
+    assert.equal(auth.getAccessToken(), "tok-2");
+  });
+
+  it("concurrent 401s trigger a single rotation, all callers retry with the new token", async () => {
+    let tokenCalls = 0;
+    const seen: Array<string | null> = [];
+    const fetchFn = stubFetch((url, init) => {
+      if (String(url).endsWith("/oauth/token")) {
+        tokenCalls += 1;
+        return json({ access_token: "tok-new", refresh_token: "ref-new", token_type: "Bearer", expires_in: 3600 });
+      }
+      if (String(url).endsWith("/v1/whoami")) {
+        const authz = new Headers(init?.headers).get("authorization");
+        seen.push(authz);
+        if (authz === "Bearer tok-new") return json({ user_id: "u-1", client_id: "c1" });
+        return json({ code: "invalid_token", message: "expired" }, 401);
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const client = new MichelangeloClient({ fetchFn, clientId: "c1" });
+    client.auth.setSession({ access_token: "tok-old", refresh_token: "ref-old", expires_in: 0 });
+    const results = await Promise.all([client.whoami(), client.whoami(), client.whoami()]);
+    assert.equal(tokenCalls, 1);
+    for (const r of results) assert.equal(r.user_id, "u-1");
+    assert.ok(seen.includes("Bearer tok-new"));
+  });
+});
+
 describe("client token injection", () => {
   it("applies the in-memory token to calls after login; 401 maps to invalid_token", async () => {
     let seenAuth: string | null = null;

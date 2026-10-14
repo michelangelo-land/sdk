@@ -63,6 +63,21 @@ export class AuthManager {
   private readonly pkceCrypto?: PkceCrypto;
   private clientId?: string;
   private session: Session | null = null;
+  /**
+   * Single-flight guard for `refresh()`: refresh tokens are single-use
+   * (the server invalidates the previous token on every rotation), so N
+   * concurrent 401s — e.g. React Query refetching profile + balance +
+   * notifications together after the access token expired — must share one
+   * token call instead of racing the same refresh token (all but one would
+   * lose with "already used" and drop to anonymous).
+   *
+   * This coalesces in-process concurrency only. Cross-tab (multi-tab web)
+   * exclusion lives one layer up, where the shared storage lives — the app
+   * serializes rotations with the Web Locks API and re-reads storage inside
+   * the lock. Same split as @supabase/auth-js (`navigatorLock` on web,
+   * process-local guard on React Native).
+   */
+  private refreshPromise: Promise<Session> | null = null;
 
   constructor(options: AuthManagerOptions = {}) {
     this.authBaseUrl = (options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL).replace(/\/$/, "");
@@ -212,8 +227,25 @@ export class AuthManager {
     });
   }
 
-  /** Rotate the access token with the stored refresh token (kept in memory). */
+  /**
+   * Rotate the access token with the stored refresh token (kept in memory).
+   * Concurrent callers share a single in-flight token request (single-flight)
+   * — see `refreshPromise`. The in-flight promise is cleared on settle so a
+   * later expiry triggers a fresh rotation.
+   */
   async refresh(): Promise<Session> {
+    const inFlight = this.refreshPromise;
+    if (inFlight) return inFlight;
+    const started = this.doRefresh();
+    this.refreshPromise = started;
+    try {
+      return await started;
+    } finally {
+      if (this.refreshPromise === started) this.refreshPromise = null;
+    }
+  }
+
+  private async doRefresh(): Promise<Session> {
     const refreshToken = this.session?.refreshToken;
     if (!refreshToken) {
       throw new MichelangeloAuthError("refresh: no refresh_token in memory", "missing_refresh_token");
