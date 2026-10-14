@@ -290,7 +290,9 @@ export class MichelangeloClient {
 
   /**
    * `POST /jobs` — creates the row (`status: queued`) and returns it
-   * immediately (HTTP 202; 200 on idempotent replay). Poll `getJob` /
+   * immediately (HTTP 202; 200 on idempotent replay). Omit `project_id` on
+   * first generation: the server creates the project synchronously and
+   * returns its id on the job row (`job.project_id`). Poll `getJob` /
    * `waitForJob` for progress. Prompt-only: GitHub pushes moved to the
    * synchronous `POST /projects/{projectId}/pushes`
    * (`pushProjectToGithub`), not a queued job.
@@ -662,13 +664,15 @@ export class MichelangeloClient {
   }
 
   /**
-   * `GET /wallets/me/transactions` — top-up/spend history (cursor over created_at).
-   * Every `spend` row carries `metadata` with `run_id`, `model`, `provider`,
-   * `cost_eur` and preformatted `display_cost` — render `display_cost` verbatim.
+   * `GET /wallets/me/transactions` — full ledger (`topup`/`bonus`/`spend`/`refund`/`migration`/`adjustment`, cursor over created_at).
+   * Pass `reason: "spend"` for expenses only; omit for everything.
+   * Every `spend` row carries top-level `cost_eur` ("1.05") and preformatted
+   * `display_cost` ("1,05 €") — render `display_cost` verbatim.
    */
   listMyTransactions(options: ListTransactionsOptions = {}): Promise<WalletTransactionsPage> {
     const params = new URLSearchParams();
     params.set("limit", String(options.limit ?? 20));
+    if (options.reason !== undefined) params.set("reason", options.reason);
     if (options.cursor !== undefined) params.set("cursor", options.cursor);
     return this.request<WalletTransactionsPage>(`/wallets/me/transactions?${params.toString()}`);
   }
@@ -682,11 +686,13 @@ export class MichelangeloClient {
   ): Promise<WalletTransactionsPage["data"]> {
     const limit = options.limit ?? 100;
     const maxPages = options.maxPages ?? 50;
+    const reason = options.reason;
     const all: WalletTransactionsPage["data"] = [];
     let cursor: string | undefined = options.cursor;
     for (let page = 0; page < maxPages; page++) {
       const res = await this.listMyTransactions({
         limit,
+        ...(reason !== undefined ? { reason } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
       });
       all.push(...res.data);

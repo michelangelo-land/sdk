@@ -116,6 +116,7 @@ export type {
   WaitForJobOptions,
   Wallet,
   WalletTransaction,
+  WalletTransactionReason,
   WalletTransactionsPage,
   Whoami,
 } from "./types.js";

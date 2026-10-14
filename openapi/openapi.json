@@ -1,1 +1,4059 @@
-{"openapi":"3.1.0","info":{"title":"Michelangelo Public API","version":"0.1.0","description":"Public API of the Michelangelo platform. This is the stable contract for the community: plugins, SDKs, MCP servers and third-party apps integrate here — never directly with the underlying backend.\nDesign rules (see ADR 0001): - Every long-running operation is an async **job** with state in the DB. - Auth is OAuth 2.1 + PKCE (Supabase as identity provider); tokens are\n  standard Supabase JWTs validated via JWKS.\n- All routes are versioned under `/v1`. Breaking changes ship as `/v2`.\n","contact":{"name":"Michelangelo Community"},"license":{"name":"MIT","identifier":"MIT"}},"servers":[{"url":"https://api.michelangelo.land/v1","description":"Production"},{"url":"https://michelangelo-api.giacomo-sardo98.workers.dev/v1","description":"Default workers.dev endpoint"}],"tags":[{"name":"auth","description":"Identity introspection for the current token"},{"name":"billing","description":"Wallet top-ups via Stripe Checkout (EUR)"},{"name":"docs","description":"Machine-readable contract and interactive reference"},{"name":"github","description":"GitHub App installs, linked repos and inbound webhooks"},{"name":"integrations","description":"Supabase-account OAuth and project links"},{"name":"jobs","description":"Async long-running operations (prompts, builds, AI runs)"},{"name":"moderation","description":"Reports and blocks (community safety)"},{"name":"notifications","description":"In-app notifications and Expo push tokens"},{"name":"projects","description":"Michelangelo projects owned by the authenticated user"},{"name":"usage","description":"Consumption summaries backed by usage_events RPCs"},{"name":"users","description":"Current user profile with sparse fieldsets"},{"name":"wallets","description":"Credit balance and transaction history"}],"paths":{"/health":{"get":{"operationId":"getHealth","summary":"Liveness check — no authentication required","security":[],"responses":{"200":{"description":"API is up","content":{"application/json":{"schema":{"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean","enum":[true]}}}}}}}}},"/openapi.json":{"get":{"tags":["docs"],"operationId":"getOpenApiDocument","summary":"OpenAPI document as JSON — SDK generator feed","description":"Serves this very contract (`openapi/v1.yaml`) as JSON. Feed it to OpenAPI Generator, hey-api, orval, Postman/Insomnia — or open `GET /v1/docs` — to build a client without asking anyone. No authentication required.\n","security":[],"responses":{"200":{"description":"The OpenAPI 3.1 document","content":{"application/json":{"schema":{"type":"object"}}}}}}},"/docs":{"get":{"tags":["docs"],"operationId":"getDocs","summary":"Interactive API reference (Scalar)","description":"Human-friendly reference rendered from `GET /v1/openapi.json`. No authentication required to open it (calling the listed endpoints still needs a token).\n","security":[],"responses":{"200":{"description":"HTML page hosting the Scalar API reference","content":{"text/html":{"schema":{"type":"string"}}}}}}},"/whoami":{"get":{"tags":["auth"],"operationId":"getWhoami","summary":"Return the identity behind the current access token","description":"Cheap endpoint for clients to validate a token and discover the user, the OAuth client it was issued to, and the granted scopes. Backed by JWKS validation only — no upstream call required.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"200":{"description":"Current token identity","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Whoami"}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/me":{"get":{"tags":["users"],"operationId":"getMe","summary":"Get current user profile — sparse fieldsets","description":"Returns the authenticated user's profile (`user_id` always included). Pass `?fields=username,email,avatar_url` to fetch only what you need: `email` comes straight from the validated JWT (zero DB cost), `username`/`avatar_url` are read from `public.profiles` with a column-select limited to the requested fields. Omit `fields` to get everything at once. Unknown field names → 400 `invalid_fields`. Data sources verified on Supabase: `username`+`avatar_url` live in `public.profiles` (e.g. `jack` → `.../storage/v1/object/public/avatars/...`), `email` lives only in `auth.users` so the API serves the JWT `email` claim instead of hitting `auth.*` over PostgREST.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"fields","in":"query","description":"Comma-separated subset of `username,email,avatar_url`. Example: `?fields=username,email`. Omit for the full profile.\n","schema":{"type":"string","example":"username,email"}}],"responses":{"200":{"description":"Current user profile (only requested fields + user_id)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Me"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}},"patch":{"tags":["users"],"operationId":"updateMe","summary":"Update current user profile (username, avatar_url)","description":"Updates `public.profiles` as the user (RLS `Users can update own profile`). Accepts `username` (3..30 chars, `^[a-z0-9][a-z0-9_.]{1,28}[a-z0-9]$`) and/or `avatar_url` (public URL or null to remove). Mirrors `src/screens/settings/edit-username.tsx` + `edit-profile.tsx` in michelangelo-app. Duplicate username → 409 `username_taken`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/UpdateMeRequest"}}}},"responses":{"200":{"description":"Updated profile","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Me"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"description":"Username already taken","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}},"delete":{"tags":["users"],"operationId":"deleteMe","summary":"Delete account and data (proxies delete-account edge)","description":"Proxies the Supabase `delete-account` edge function with the user JWT (no body). The edge removes files, notifications, github links, avatar objects, then `auth.admin.deleteUser` (cascades profiles, projects, usage_events, subscriptions, reshares, reports, blocks).\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"204":{"description":"Account deleted"},"401":{"$ref":"#/components/responses/Unauthorized"},"502":{"description":"Upstream delete failed","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}}},"/me/avatar":{"post":{"tags":["users"],"operationId":"uploadMyAvatar","summary":"Upload avatar file (multipart) → public URL","description":"Accepts `multipart/form-data` with a single `file` field (png/jpeg/webp, max 5MB — same limits as `edit-profile.tsx:uploadImage`). Uploads to the public `avatars` bucket at `{user_id}/avatar_{ts}.{ext}` via service role, then updates `profiles.avatar_url` with the public URL. Returns the URL.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"}}}}}},"responses":{"201":{"description":"Avatar uploaded","content":{"application/json":{"schema":{"type":"object","required":["avatar_url"],"properties":{"avatar_url":{"type":"string","format":"uri"}}}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/users/{userId}":{"get":{"tags":["users"],"operationId":"getPublicProfile","summary":"Public profile by id (mirrors screens/user feed hero)","description":"Selects `id,username,avatar_url,is_supporter,created_at,updated_at` from `public.profiles` — the exact column set `screens/user/index.tsx` reads. RLS `Profiles are viewable by everyone`, so any authenticated caller can read any profile (needed by explore feed, preview and user screens). Pairs with the `author` embed on Project.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"userId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"200":{"description":"Public profile","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PublicProfile"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/jobs":{"post":{"tags":["jobs"],"operationId":"createJob","summary":"Create an async job","description":"Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt`: `input.prompt` is evaluated server-side (invalid → 400, quota → 429, overdraft floor → 402 `insufficient_credits`). Small overdraft is allowed: a user with 1 cent still runs and goes negative, the next top-up absorbs the red. Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and         `expo_push_token` (stored in `input`, used for completion push). Top-level `live_activity_token`, `live_activity_user` and `supabase_project_ref` are folded into `input` the same way (top-level wins on conflict with `input` keys); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreatePromptJobRequest"}}}},"responses":{"200":{"description":"Idempotent replay — existing job for idempotency_key","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Job"}}}},"202":{"description":"Job accepted and queued","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Job"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"402":{"description":"Insufficient credits — top up (overdraft floor reached)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}},"429":{"$ref":"#/components/responses/RateLimited"}}}},"/jobs/attachments":{"post":{"tags":["jobs"],"operationId":"uploadJobAttachments","summary":"Upload prompt images (multipart) → manifest","description":"Accepts `multipart/form-data` with up to 3 image files (png/jpeg/webp, max 5MB each — same limits as `uploadPromptAttachments` in michelangelo-app). Optional text field `idempotency_key` (uuid, generated server-side when omitted). Uploads each to the private `job-attachments` bucket at `{user_id}/{idempotency_key}/image-{i}.{ext}` and returns the manifest to pass as `attachments` in `POST /v1/jobs` (`type=prompt`). Files stay in the transient bucket until the runner downloads and deletes them.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","properties":{"idempotency_key":{"type":"string","format":"uuid"},"files":{"type":"array","maxItems":3,"items":{"type":"string","format":"binary"}}}}}}},"responses":{"201":{"description":"Manifest of stored attachments","content":{"application/json":{"schema":{"$ref":"#/components/schemas/AttachmentsManifest"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/jobs/{jobId}":{"get":{"tags":["jobs"],"operationId":"getJob","summary":"Get job status","description":"Polling endpoint. Clients should poll with backoff (suggested: 2s → 30s max). A future version may offer realtime delivery (SSE / Realtime) without changing this contract.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"$ref":"#/components/parameters/JobId"}],"responses":{"200":{"description":"Job snapshot","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Job"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/projects":{"get":{"tags":["projects"],"operationId":"listProjects","summary":"List projects of the authenticated user","description":"Returns the authenticated user's own projects by default (`visibility=mine`). Pass `visibility=all` to also include public/shared community projects. RLS of the underlying backend applies on top: users can never see other people's private rows.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},{"name":"cursor","in":"query","description":"Opaque cursor from a previous response","schema":{"type":"string"}},{"name":"visibility","in":"query","description":"`mine` (default): only the caller's own projects. `all`: own projects plus public/shared community projects.\n","schema":{"type":"string","enum":["mine","all"],"default":"mine"}},{"name":"q","in":"query","description":"Full-text query via RPC match_project (RLS still applies)","schema":{"type":"string"}}],"responses":{"200":{"description":"Page of projects","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProjectPage"}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}},"post":{"tags":["projects"],"operationId":"createProject","summary":"Create a project (insert public.projects)","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateProjectRequest"}}}},"responses":{"201":{"description":"Project created","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Project"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/billing/checkouts":{"post":{"tags":["billing"],"operationId":"createBillingCheckout","summary":"Create a Stripe Checkout Session for wallet top-up","description":"Creates a one-time EUR Checkout Session (`mode: payment`) for the authenticated user. The app opens `checkout_url` in a browser/Desktop webview. Supports preset amounts (5, 20, 100, 200 EUR — matching the existing Stripe prices) or any custom whole-euro amount via `amount_eur`. Conversion is fixed: 1 EUR = 100 credits (1 credit = 1 EUR-cent), credited to `wallets.balance` by the Stripe webhook (`checkout.session.completed`). Pass `success_url`/`cancel_url` to deep-link back into Desktop/michelangelo-app (defaults come from server env).\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateBillingCheckoutRequest"}}}},"responses":{"201":{"description":"Checkout Session created — open checkout_url","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BillingCheckout"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/billing/webhooks":{"post":{"tags":["billing"],"operationId":"handleBillingWebhook","summary":"Stripe webhook — credits wallets on payment","description":"Stripe calls this endpoint (no auth — verified via `Stripe-Signature` against `STRIPE_WEBHOOK_SECRET`). Handles `checkout.session.completed` with `payment_status: paid`: idempotently inserts a `wallet_transactions` row (`reason: topup`) and increments `wallets.balance` by `credits` (1 EUR = 100 credits). Configure the URL in the Stripe Dashboard; keep the legacy Supabase `stripe-webhook` endpoint until traffic is migrated.\n","security":[],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","description":"Raw Stripe event payload (verified by signature)"}}}},"responses":{"200":{"description":"Webhook received (or ignored for other event types)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/WebhookReceived"}}}},"400":{"description":"Bad signature or malformed payload","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}}},"/projects/{projectId}":{"get":{"tags":["projects"],"operationId":"getProject","summary":"Get a single project","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"200":{"description":"The project","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Project"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}},"patch":{"tags":["projects"],"operationId":"updateProject","summary":"Rename / share (update public.projects)","description":"Mirrors `useRenameProject` (`{name}`) + `useToggleVisibility` (`{shared}`) in michelangelo-app. At least one of `name,shared` required. RLS: only the owner can update. The icon is server-managed (first generation + POST .../icon) — clients cannot set `icon_url` here.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/UpdateProjectRequest"}}}},"responses":{"200":{"description":"Updated project","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Project"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}},"delete":{"tags":["projects"],"operationId":"deleteProject","summary":"Delete a project (mirrors useDeleteProject)","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"204":{"description":"Project deleted"},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/projects/{projectId}/files":{"get":{"tags":["projects"],"operationId":"listProjectFiles","summary":"List files of a project (+ updated_at)","description":"Selects `public.files` (`path,contents,type,updated_at`) ordered by path. Mirrors `use-project-files.ts` (which filters `type=CODE` client-side; pass `?type=CODE` for the same view). RLS: owner or shared project.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}},{"name":"type","in":"query","schema":{"type":"string","example":"CODE"}}],"responses":{"200":{"description":"Files of the project","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/ProjectFile"}}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}},"put":{"tags":["projects"],"operationId":"saveProjectFiles","summary":"Save files (per-file update-then-insert upsert)","description":"Body `{files:[{path,contents,type}]}`. Per file: `PATCH ?project_id=eq.X&path=eq.Y`, if zero rows then `POST`. Same result as `use-project-files.ts` save (which issues one update per file).\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SaveFilesRequest"}}}},"responses":{"200":{"description":"Saved files","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/ProjectFile"}}}}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/projects/{projectId}/icon":{"post":{"tags":["projects"],"operationId":"generateProjectIcon","summary":"Generate + assign icon (proxies generate-project-icon edge)","description":"Proxies the Supabase `generate-project-icon` edge (`{project_id}`) with the user JWT. The edge reads `get_project_for_icon`, uploads `project-icons/{id}/{ts}.png`, then `update_project_icon`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"200":{"description":"Icon generation accepted (edge result proxied)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProjectIconResult"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/projects/{projectId}/pushes":{"post":{"tags":["projects"],"operationId":"pushProjectToGithub","summary":"Push project to linked GitHub repo (Snack bundle → GitHub)","description":"Synchronously invokes the `github-actions` push edge for a GitHub-linked project (same edge the app used to call directly). The project must be visible to the caller (RLS). Returns 201 with `{pushed, commit_sha}` on success. Short integration action — not a queued job, no polling needed.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"201":{"description":"Push completed","content":{"application/json":{"schema":{"$ref":"#/components/schemas/GithubPushResult"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/projects/{projectId}/reshares":{"post":{"tags":["projects"],"operationId":"reshareProject","summary":"Republish / share (insert project_reshares)","description":"Mirrors `use-reshare.ts`: inserts `{project_id,reshared_by_user_id,platform,share_metadata}`. Duplicate (same project+user+platform) → 200 with `deduped:true` instead of an error.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReshareRequest"}}}},"responses":{"200":{"description":"Reshare already recorded (idempotent replay)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Deduped"}}}},"201":{"description":"Reshare recorded","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProjectReshare"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/projects/{projectId}/preview-errors":{"get":{"tags":["projects"],"operationId":"listPreviewErrors","summary":"Preview errors (select preview_errors)","description":"Mirrors `use-preview-errors.ts`: selects `id,message,stack,created_at` for the project (max 10, oldest first). Pure read — never mutates. To drain after rendering, call `DELETE` on the same path. RLS: project owner only.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"200":{"description":"Preview errors of the project","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/PreviewError"}}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}},"delete":{"tags":["projects"],"operationId":"drainPreviewErrors","summary":"Drain preview errors (delete after render)","description":"Deletes all preview errors of the project (what the app did with `?consume=true`). Idempotent. RLS: project owner only.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"200":{"description":"Drain result","content":{"application/json":{"schema":{"type":"object","required":["deleted_count"],"properties":{"deleted_count":{"type":"integer"}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/projects/{projectId}/supabase-link":{"get":{"tags":["integrations"],"operationId":"getProjectSupabaseLink","summary":"Supabase link of one project (safe columns only)","description":"Selects `project_id,supabase_project_ref,supabase_project_name,api_url` from `supabase_project_links`. Mirrors the app read (never `anon_key` over this route). 404 when the project has no link.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"200":{"description":"The project link","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SupabaseProjectLink"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/reports":{"post":{"tags":["moderation"],"operationId":"createReport","summary":"Report content (insert reports)","description":"Mirrors `utils/project.ts:reportAlert`: inserts `{reporter_id,reported_project_id?,reported_user_id?,reason?}`. At least one target required. RLS `users can create reports`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateReportRequest"}}}},"responses":{"201":{"description":"Report recorded","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Report"}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/blocks":{"post":{"tags":["moderation"],"operationId":"blockUser","summary":"Block a user (insert blocked_users)","description":"Mirrors `reportAlert` block path: inserts `{blocker_id,blocked_id}`. Duplicate → 200 `deduped:true`. Cannot block yourself → 400.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateBlockRequest"}}}},"responses":{"200":{"description":"Already blocked (idempotent replay)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Deduped"}}}},"201":{"description":"User blocked","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Block"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/github/token":{"post":{"tags":["github"],"operationId":"exchangeGithubToken","summary":"OAuth code → token (secret never leaves the server)","description":"Proxies the Supabase `github-token-exchange` edge with the user JWT: `{code,redirect_uri?}` → `{access_token}`. The GitHub client secret stays in edge secrets, never ships to the app. Mirrors `getGitHubToken` in michelangelo-app.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"redirect_uri":{"type":"string","format":"uri"}}}}}},"responses":{"200":{"description":"GitHub user access token","content":{"application/json":{"schema":{"type":"object","required":["access_token"],"properties":{"access_token":{"type":"string"}}}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/github/installations":{"get":{"tags":["github"],"operationId":"listGithubInstallations","summary":"GitHub App installations of the user (safe columns only)","description":"Selects `id,login,avatar,name` from `github_installations` for the caller. Never exposes `ghu` (the stored OAuth token). Mirrors the installation picker in `components/github.tsx`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"200":{"description":"Installations of the user","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/GithubInstallation"}}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}},"post":{"tags":["github"],"operationId":"saveGithubInstallation","summary":"Store installation after OAuth (upsert github_installations)","description":"Replaces `storeInstallation` in `use-github-mutations.ts` (which no longer writes to the DB — it only returns `{installation_id,profile}`). Upserts `{id,user_id,ghu,login,avatar,name}` on conflict `id`; `user_id` is always forced from the JWT (client value ignored). `ghu` (user OAuth token) is write-only — never returned. The webhook edge only refreshes rows, so without this call installations would never exist.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SaveGithubInstallationRequest"}}}},"responses":{"201":{"description":"Installation stored (safe columns only)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/GithubInstallation"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/github/repositories":{"get":{"tags":["github"],"operationId":"listGithubRepositories","summary":"Repos linked by the user (via their installations)","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"200":{"description":"Linked repositories of the user","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/GithubRepository"}}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}},"post":{"tags":["github"],"operationId":"linkGithubRepository","summary":"Save selected repo (upsert github_repositories)","description":"Mirrors the link step in `use-github-mutations.ts`: verifies the installation belongs to the caller, then upserts `{project_id,github_installation_id,github_repository_name,github_last_sync}` on conflict `project_id`. Defaults `github_repository_name` to `michelangelo-{project_id}` (app convention) when omitted.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LinkGithubRepositoryRequest"}}}},"responses":{"201":{"description":"Repository linked","content":{"application/json":{"schema":{"$ref":"#/components/schemas/GithubRepository"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"description":"Project or installation not found — same Error shape","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}}},"/github/repositories/{projectId}":{"delete":{"tags":["github"],"operationId":"unlinkGithubRepository","summary":"Unlink repo from a project (delete github_repositories)","description":"Unblocks `useGitHubDisconnect` (which throws until this exists). Deletes the link row for the path `projectId` scoped to the caller's installations (a user can only unlink their own links). Idempotent: 204 even when no link exists.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"204":{"description":"Repository unlinked (idempotent)"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/github/webhooks":{"post":{"tags":["github"],"operationId":"handleGithubWebhook","summary":"GitHub events (HMAC verified, no JWT — proxies github-webhook edge)","description":"GitHub calls this endpoint (no auth — verified via `X-Hub-Signature-256` HMAC-SHA256 against `GITHUB_WEBHOOK_SECRET`, then forwarded to the Supabase `github-webhook` edge, which refreshes `github_installations` profile fields on `installation.created` and deletes the row on `installation.deleted`). Configure the URL in the GitHub App settings.\n","security":[],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","description":"Raw GitHub event payload (signature verified)"}}}},"responses":{"200":{"description":"Webhook received","content":{"application/json":{"schema":{"$ref":"#/components/schemas/WebhookReceived"}}}},"400":{"description":"Bad signature or malformed payload","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}}},"/integrations/supabase/authorizations":{"post":{"tags":["integrations"],"operationId":"createSupabaseAuthorization","summary":"Start Supabase-account OAuth (proxies connect-supabase/login edge)","description":"Proxies `GET connect-supabase/login` with the caller id from the JWT (`user_id`) plus the app PKCE `code_challenge`/`code_verifier?`. Returns `{authorize_url,return_url}` — the app opens `authorize_url` via `openAuthSessionAsync` and the edge deep-links back to `michelangelo://supabase-connected` after the callback stores the connection (tokens stay server-side in `supabase_connections`).\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["code_challenge"],"properties":{"code_challenge":{"type":"string"},"code_verifier":{"type":"string"}}}}}},"responses":{"200":{"description":"OAuth authorize URL","content":{"application/json":{"schema":{"type":"object","required":["authorize_url","return_url"],"properties":{"authorize_url":{"type":"string","format":"uri"},"return_url":{"type":"string"}}}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/integrations/supabase/projects":{"get":{"tags":["integrations"],"operationId":"listSupabaseProjects","summary":"User's Supabase projects (proxies connect-supabase/projects)","description":"Proxies `GET connect-supabase/projects` with the user JWT (the edge refreshes the OAuth token as needed). Returns `{projects:[{ref,name,region,created_at,linked_project_id}],organizations}`. 404 `not_connected` when the Supabase account is not linked.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"200":{"description":"Supabase projects of the user","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SupabaseProjectsResult"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"description":"Supabase account not connected — same Error shape","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}}},"/integrations/supabase/links":{"post":{"tags":["integrations"],"operationId":"linkSupabaseProject","summary":"Link app ↔ Supabase ref (proxies connect-supabase/link)","description":"Proxies `POST connect-supabase/link` (`{project_id,supabase_ref}`) with the user JWT. The edge verifies project ownership, Supabase-account ownership, 1:1 uniqueness (409 `already_linked`) and fetches the anon key server-side, then upserts `supabase_project_links`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LinkSupabaseProjectRequest"}}}},"responses":{"201":{"description":"Project linked","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SupabaseLinkResult"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"description":"Project not found or Supabase not connected — same Error shape","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}},"409":{"description":"Supabase project already backs another app","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}}},"/integrations/supabase/links/{projectId}":{"delete":{"tags":["integrations"],"operationId":"unlinkSupabaseProject","summary":"Unlink app ↔ Supabase ref (delete supabase_project_links)","description":"Unblocks `useSupabaseUnlink` (which throws until this exists). Deletes the link row for the path `projectId` scoped to the caller (RLS `Users can manage own supabase project links`). Idempotent: 204 even when no link exists.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"projectId","in":"path","required":true,"schema":{"type":"integer","format":"int64"}}],"responses":{"204":{"description":"Project unlinked (idempotent)"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/integrations/supabase/connection":{"get":{"tags":["integrations"],"operationId":"getSupabaseConnection","summary":"Connection state (safe columns of supabase_connections)","description":"Selects `supabase_user_id,supabase_username` for the caller (never the OAuth tokens). `{connected:false}` when no row exists. Mirrors `use-supabase-connection.ts`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"200":{"description":"Connection state","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SupabaseConnection"}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/wallets/me":{"get":{"tags":["wallets"],"operationId":"getMyWallet","summary":"Balance + bonus (select wallets)","description":"Mirrors `use-credit-balance.ts:fetchCreditBalance` wallet leg: selects `balance,bonus_balance,bonus_expires_at` for the caller. Expired bonus is reported as 0 bonus (same rule as RPC `get_wallet_balance`). Unit is EUR-cent credits (1 EUR = 100 credits); `display_*` fields are preformatted server-side with `Intl.it-IT EUR` — clients render them verbatim and never compute `balance/100` themselves. New signups get a 500-credit (€5.00) welcome bonus valid 30 days; spend consumes bonus first, then paid balance, which may go down to −500 (−€5.00 overdraft) before `POST /jobs` returns `402 insufficient_credits`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"200":{"description":"Wallet snapshot","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Wallet"}}}},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/wallets/me/transactions":{"get":{"tags":["wallets"],"operationId":"listMyTransactions","summary":"Top-up/spend history (select wallet_transactions)","description":"Per-generation spend log: every `spend` row carries `metadata` with `run_id`, `model`, `provider`, `cost_eur` (\"1.05\") and `display_cost` (\"1,05 €\") preformatted server-side — clients render `display_cost` verbatim so the user sees what each generation cost.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},{"name":"cursor","in":"query","description":"ISO timestamp cursor over created_at","schema":{"type":"string"}}],"responses":{"200":{"description":"Page of transactions","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/WalletTransaction"}},"next_cursor":{"type":["string","null"]}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/usage/summary":{"get":{"tags":["usage"],"operationId":"getUsageSummary","summary":"Consumption summary (RPC get_usage_summary)","description":"Proxies RPC `get_usage_summary(p_period,p_year,p_month)` as the user (`auth.uid()` inside). Mirrors `context/usage.tsx` (`month` + `all`).\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"period","in":"query","schema":{"type":"string","enum":["month","week","all"],"default":"month"}},{"name":"year","in":"query","schema":{"type":"integer"}},{"name":"month","in":"query","schema":{"type":"integer","minimum":1,"maximum":12}}],"responses":{"200":{"description":"Usage summary row","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UsageSummary"}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/usage/contributions":{"get":{"tags":["usage"],"operationId":"getUsageContributions","summary":"Daily contributions (RPC get_usage_contributions)","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"start_date","in":"query","schema":{"type":"string","format":"date-time"}},{"name":"end_date","in":"query","schema":{"type":"string","format":"date-time"}}],"responses":{"200":{"description":"Daily run/token counts","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/UsageContribution"}}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/usage/insights":{"get":{"tags":["usage"],"operationId":"getUsageInsights","summary":"Insights (RPC get_usage_insights)","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"timezone","in":"query","schema":{"type":"string","default":"UTC"}}],"responses":{"200":{"description":"Insight row","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UsageInsights"}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/notifications":{"get":{"tags":["notifications"],"operationId":"listNotifications","summary":"List notifications (cursor, mirrors push-notifications.tsx)","description":"Selects `notifications` for the caller ordered by `created_at` desc (limit 50 max client-side; API default 20). Includes `sender{username,avatar_url}` expansion.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},{"name":"cursor","in":"query","description":"ISO timestamp cursor over created_at","schema":{"type":"string"}}],"responses":{"200":{"description":"Page of notifications","content":{"application/json":{"schema":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/Notification"}},"next_cursor":{"type":["string","null"]}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}},"patch":{"tags":["notifications"],"operationId":"markAllNotificationsRead","summary":"Mark all as read (bulk update, mirrors markAllAsRead)","description":"Mirrors `markAllAsRead` in `push-notifications.tsx` (fired on blur of the notifications screen): sets `is_read=true` on all unread rows of the caller. Only `{is_read:true}` is accepted. Returns the updated count.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["is_read"],"properties":{"is_read":{"type":"boolean","enum":[true]}}}}}},"responses":{"200":{"description":"Bulk update result","content":{"application/json":{"schema":{"type":"object","required":["updated_count"],"properties":{"updated_count":{"type":"integer"}}}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/notifications/unread-count":{"get":{"tags":["notifications"],"operationId":"getUnreadCount","summary":"Badge count (RPC get_unread_notifications_count)","security":[{"oauth2":[]},{"bearerAuth":[]}],"responses":{"200":{"description":"Unread badge","content":{"application/json":{"schema":{"type":"object","required":["unread_count"],"properties":{"unread_count":{"type":"integer"}}}}}},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/notifications/{notificationId}":{"patch":{"tags":["notifications"],"operationId":"markNotificationRead","summary":"Mark read (update notifications)","description":"Mirrors single-read (`update{is_read:true}.eq(id).eq(recipient_id)`) in `push-notifications.tsx`. Body `{is_read:true}` (only true supported — unread is a fresh row, not a toggle).\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"notificationId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["is_read"],"properties":{"is_read":{"type":"boolean","enum":[true]}}}}}},"responses":{"200":{"description":"Updated notification","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Notification"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"404":{"$ref":"#/components/responses/NotFound"}}}},"/push-tokens":{"post":{"tags":["notifications"],"operationId":"registerPushToken","summary":"Register Expo token (upsert expo_push_tokens)","description":"Mirrors `savePushToken`/`savePushTokenToDB`: upserts `{user_id,token,device_type?,is_active:true,last_used_at,locale?,time_zone?}` on conflict `token`. RLS `Users can manage own push tokens`.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/RegisterPushTokenRequest"}}}},"responses":{"201":{"description":"Token registered","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PushToken"}}}},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}}},"/push-tokens/{token}":{"delete":{"tags":["notifications"],"operationId":"removePushToken","summary":"Remove token (mirrors logout path)","description":"Deletes the caller's push token. `token` is URL-encoded (e.g. `ExponentPushToken%5Bx%5D`). Idempotent: 204 even when the token does not exist.\n","security":[{"oauth2":[]},{"bearerAuth":[]}],"parameters":[{"name":"token","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Token removed"},"401":{"$ref":"#/components/responses/Unauthorized"}}}}},"components":{"securitySchemes":{"oauth2":{"type":"oauth2","description":"OAuth 2.1 authorization code flow with PKCE, issued by the Michelangelo auth server on auth.michelangelo.land — the upstream backend is an implementation detail. Third-party clients register via Dynamic Client Registration at /auth/v1/oauth/clients/register. Data APIs live under api.michelangelo.land/v1.\n","flows":{"authorizationCode":{"authorizationUrl":"https://auth.michelangelo.land/auth/v1/oauth/authorize","tokenUrl":"https://auth.michelangelo.land/auth/v1/oauth/token","scopes":{}}}},"bearerAuth":{"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"Supabase-issued JWT, validated by the API via JWKS"}},"parameters":{"JobId":{"name":"jobId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}},"schemas":{"Whoami":{"type":"object","required":["user_id","client_id"],"properties":{"user_id":{"type":"string","format":"uuid"},"client_id":{"type":"string","description":"OAuth client the token was issued to"},"scopes":{"type":"array","items":{"type":"string"}},"rate_limit":{"type":"object","description":"Current quota snapshot for this client (when available)","properties":{"limit":{"type":"integer"},"remaining":{"type":"integer"},"reset_at":{"type":"string","format":"date-time"}}}}},"Me":{"type":"object","required":["user_id"],"properties":{"user_id":{"type":"string","format":"uuid","description":"Auth user id (JWT sub, matches public.profiles.id)"},"username":{"type":["string","null"],"description":"Username from public.profiles (e.g. `jack`)"},"email":{"type":["string","null"],"format":"email","description":"Email from the validated JWT (mirrors auth.users.email)"},"avatar_url":{"type":["string","null"],"format":"uri","description":"Public avatar URL from public.profiles.avatar_url (bucket `avatars`)"}}},"UpdateMeRequest":{"type":"object","minProperties":1,"properties":{"username":{"type":"string","minLength":3,"maxLength":30,"pattern":"^[a-z0-9][a-z0-9_.]{1,28}[a-z0-9]$"},"avatar_url":{"type":["string","null"],"format":"uri"}}},"CreateProjectRequest":{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":1,"maxLength":120},"shared":{"type":"boolean","default":true}}},"UpdateProjectRequest":{"type":"object","minProperties":1,"properties":{"name":{"type":"string","minLength":1,"maxLength":120},"shared":{"type":"boolean"}}},"ProjectFile":{"type":"object","required":["path","contents"],"properties":{"path":{"type":"string"},"contents":{"type":"string"},"type":{"type":"string","example":"CODE"},"updated_at":{"type":"string","format":"date-time"}}},"SaveFilesRequest":{"type":"object","required":["files"],"properties":{"files":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"object","required":["path","contents"],"properties":{"path":{"type":"string","minLength":1},"contents":{"type":"string"},"type":{"type":"string","default":"CODE"}}}}}},"ReshareRequest":{"type":"object","required":["platform"],"properties":{"platform":{"type":"string","minLength":1},"share_metadata":{"type":"object","additionalProperties":true}}},"CreateReportRequest":{"type":"object","properties":{"reported_project_id":{"type":"integer","format":"int64"},"reported_user_id":{"type":"string","format":"uuid"},"reason":{"type":"string"}}},"CreateBlockRequest":{"type":"object","required":["blocked_id"],"properties":{"blocked_id":{"type":"string","format":"uuid"}}},"Wallet":{"type":"object","required":["balance","bonus_balance","total","currency","balance_eur","display_total"],"description":"Wallet snapshot in minor units. 1 credit = 1 EUR-cent. Money math never uses floats: clients render `display_total` / `display_balance` verbatim and never divide `balance` themselves.\n","properties":{"balance":{"type":"integer","description":"Paid balance in EUR-cent credits"},"bonus_balance":{"type":"integer","description":"Bonus in EUR-cent credits (0 when expired)"},"bonus_expires_at":{"type":["string","null"],"format":"date-time"},"total":{"type":"integer","description":"balance + bonus_balance in EUR-cent credits"},"currency":{"type":"string","enum":["eur"]},"balance_eur":{"type":"string","description":"Paid balance as decimal EUR string with 2 decimals (no float)","example":"10.10"},"display_balance":{"type":"string","description":"Preformatted balance for direct rendering (it-IT)","example":"10,10 €"},"display_total":{"type":"string","description":"Preformatted total for direct rendering (it-IT)","example":"10,10 €"}}},"WalletTransaction":{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"delta":{"type":"integer"},"reason":{"type":"string","enum":["bonus","topup","spend","refund","migration","adjustment"]},"credits":{"type":["integer","null"]},"product_id":{"type":["string","null"]},"created_at":{"type":"string","format":"date-time"},"metadata":{"type":"object","description":"Spend rows carry run_id, model, provider, cost_eur and display_cost; topup rows carry stripe_session_id and amount_eur.\n","additionalProperties":true}}},"UsageSummary":{"type":"object","properties":{"period_start":{"type":"string","format":"date-time"},"period_end":{"type":"string","format":"date-time"},"run_count":{"type":"integer"},"generation_count":{"type":"integer"},"input_tokens":{"type":"integer"},"output_tokens":{"type":"integer"},"cache_read_tokens":{"type":"integer"},"cache_creation_tokens":{"type":"integer"},"has_usage_data":{"type":"boolean"}}},"UsageContribution":{"type":"object","properties":{"day":{"type":"string","format":"date"},"run_count":{"type":"integer"},"total_tokens":{"type":"integer"}}},"UsageInsights":{"type":"object","properties":{"lines_of_code":{"type":"integer"},"files_count":{"type":"integer"},"current_streak":{"type":"integer"},"best_streak":{"type":"integer"},"best_month":{"type":"string"},"best_month_apps":{"type":"integer"},"peak_hour":{"type":"integer"}}},"Notification":{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"type":{"type":"string"},"entity_type":{"type":"string"},"entity_id":{"type":["integer","null"]},"metadata":{"type":"object","additionalProperties":true},"is_read":{"type":"boolean"},"created_at":{"type":"string","format":"date-time"},"sender":{"type":["object","null"],"additionalProperties":true}}},"RegisterPushTokenRequest":{"type":"object","required":["token"],"properties":{"token":{"type":"string","minLength":1},"device_type":{"type":"string","enum":["ios","android","web"]},"locale":{"type":"string"},"time_zone":{"type":"string"}}},"JobAttachmentRef":{"type":"object","required":["path","mime","size_bytes"],"properties":{"path":{"type":"string","description":"Storage path in the job-attachments bucket (from POST /jobs/attachments)"},"mime":{"type":"string","enum":["image/png","image/jpeg","image/webp"]},"size_bytes":{"type":"integer"},"kind":{"type":"string","default":"image"}}},"CreatePromptJobRequest":{"type":"object","required":["type","input"],"properties":{"type":{"type":"string","enum":["prompt"]},"project_id":{"type":"integer","format":"int64","description":"Numeric project id (matches public.projects.id)"},"input":{"type":"object","additionalProperties":true,"required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string","enum":["light","full"]},"app_name":{"type":["string","null"],"description":"App name generated on first generation (snake_case)"}}},"attachments":{"type":"array","maxItems":3,"description":"Manifest entries from POST /jobs/attachments (stored in job_attachments + input.attachment_refs)","items":{"$ref":"#/components/schemas/JobAttachmentRef"}},"expo_push_token":{"type":"string","description":"Expo push token notified on completion (stored in input, mirrors sendPrompt)"},"live_activity_token":{"type":"string","description":"Live Activity push token (stored in input.live_activity_token, mirrors v9 enqueue)"},"live_activity_user":{"type":"string","description":"Live Activity user id (stored in input.live_activity_user, mirrors v9 enqueue)"},"supabase_project_ref":{"type":"string","description":"Linked Supabase ref for the runner (stored in input.supabase_project_ref, mirrors v9 enqueue)"},"idempotency_key":{"type":"string","format":"uuid","description":"Client-generated v4 uuid (mirrors prompt idempotency); replay returns the existing job"}}},"AttachmentsManifest":{"type":"object","required":["idempotency_key","attachments"],"properties":{"idempotency_key":{"type":"string","format":"uuid"},"attachments":{"type":"array","items":{"$ref":"#/components/schemas/JobAttachmentRef"}}}},"PreviewError":{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"message":{"type":"string"},"stack":{"type":["string","null"]},"created_at":{"type":"string","format":"date-time"}}},"ProjectReshare":{"type":"object","required":["project_id","reshared_by_user_id","platform"],"properties":{"project_id":{"type":"integer","format":"int64"},"reshared_by_user_id":{"type":"string","format":"uuid"},"platform":{"type":"string"},"share_metadata":{"type":"object","additionalProperties":true}},"additionalProperties":true},"Report":{"type":"object","required":["reporter_id"],"properties":{"id":{"type":"string","format":"uuid"},"reporter_id":{"type":"string","format":"uuid"},"reported_project_id":{"type":"integer","format":"int64"},"reported_user_id":{"type":"string","format":"uuid"},"reason":{"type":"string"},"created_at":{"type":"string","format":"date-time"}},"additionalProperties":true},"Block":{"type":"object","required":["blocker_id","blocked_id"],"properties":{"blocker_id":{"type":"string","format":"uuid"},"blocked_id":{"type":"string","format":"uuid"},"created_at":{"type":"string","format":"date-time"}},"additionalProperties":true},"Deduped":{"type":"object","description":"Idempotent replay — the row already existed","required":["deduped"],"properties":{"deduped":{"type":"boolean","enum":[true]}},"additionalProperties":false},"ProjectIconResult":{"type":"object","description":"Edge result proxied verbatim (known field documented, extra keys preserved)","properties":{"icon_url":{"type":"string","format":"uri"}},"additionalProperties":true},"SupabaseProjectsResult":{"type":"object","description":"Edge result proxied verbatim (known fields documented, extra keys preserved)","required":["projects"],"properties":{"projects":{"type":"array","items":{"type":"object","additionalProperties":true}},"organizations":{"type":"array","items":{"type":"object","additionalProperties":true}}},"additionalProperties":true},"SupabaseLinkResult":{"type":"object","description":"Project id plus edge result proxied verbatim","required":["project_id"],"properties":{"project_id":{"type":"integer","format":"int64"},"ref":{"type":"string"},"name":{"type":"string"}},"additionalProperties":true},"PushToken":{"type":"object","required":["token"],"properties":{"token":{"type":"string"},"user_id":{"type":"string","format":"uuid"},"device_type":{"type":"string","enum":["ios","android","web"]},"is_active":{"type":"boolean"},"last_used_at":{"type":"string","format":"date-time"},"locale":{"type":"string"},"time_zone":{"type":"string"}},"additionalProperties":true},"WebhookReceived":{"type":"object","required":["received"],"properties":{"received":{"type":"boolean","enum":[true]}}},"GithubInstallation":{"type":"object","properties":{"id":{"type":"integer","format":"int64"},"login":{"type":["string","null"]},"avatar":{"type":["string","null"]},"name":{"type":["string","null"]}}},"GithubRepository":{"type":"object","properties":{"project_id":{"type":"integer","format":"int64"},"github_installation_id":{"type":"integer","format":"int64"},"github_repository_name":{"type":"string"},"github_last_sync":{"type":"string","format":"date-time"}}},"GithubPushResult":{"type":"object","required":["pushed"],"properties":{"pushed":{"type":"boolean"},"commit_sha":{"type":["string","null"],"description":"Commit SHA created on GitHub (null when nothing pushed)"},"message":{"type":["string","null"]}}},"LinkGithubRepositoryRequest":{"type":"object","required":["project_id","github_installation_id"],"properties":{"project_id":{"type":"integer","format":"int64"},"github_installation_id":{"type":"integer","format":"int64"},"github_repository_name":{"type":"string","description":"Defaults to michelangelo-{project_id} (app convention)"}}},"SaveGithubInstallationRequest":{"type":"object","required":["id","ghu"],"properties":{"id":{"type":"integer","format":"int64","description":"GitHub App installation id (upserted on conflict id)"},"ghu":{"type":"string","description":"User OAuth token (write-only, stored server-side, never returned)"},"login":{"type":"string"},"avatar":{"type":["string","null"],"format":"uri"},"name":{"type":["string","null"]}}},"SupabaseProjectLink":{"type":"object","properties":{"project_id":{"type":"integer","format":"int64"},"supabase_project_ref":{"type":"string"},"supabase_project_name":{"type":"string"},"api_url":{"type":"string","format":"uri"}}},"LinkSupabaseProjectRequest":{"type":"object","required":["project_id","supabase_ref"],"properties":{"project_id":{"type":"integer","format":"int64"},"supabase_ref":{"type":"string"}}},"SupabaseConnection":{"type":"object","required":["connected"],"properties":{"connected":{"type":"boolean"},"supabase_user_id":{"type":["string","null"]},"supabase_username":{"type":["string","null"]}}},"Job":{"type":"object","required":["id","type","status","created_at"],"properties":{"id":{"type":"string","format":"uuid"},"type":{"type":"string"},"status":{"type":"string","enum":["queued","running","succeeded","failed","canceled"]},"project_id":{"type":"integer","format":"int64","description":"Numeric project id (matches public.projects.id), nullable"},"result":{"type":"object","additionalProperties":true},"error":{"$ref":"#/components/schemas/Error"},"created_at":{"type":"string","format":"date-time"},"updated_at":{"type":"string","format":"date-time"}}},"Project":{"type":"object","required":["id","name","created_at"],"properties":{"id":{"type":"integer","format":"int64","description":"Numeric project id (matches public.projects.id)"},"name":{"type":"string"},"user_id":{"type":["string","null"],"format":"uuid","description":"Owner id (needed by feed/user screens to fetch the author profile)"},"shared":{"type":"boolean","description":"Community visibility (preview/feed only show shared projects)"},"icon_url":{"type":"string","format":"uri"},"author":{"type":["object","null"],"description":"Embedded author profile (username, avatar_url) via projects_user_id_fkey","properties":{"username":{"type":["string","null"]},"avatar_url":{"type":["string","null"],"format":"uri"}}},"created_at":{"type":"string","format":"date-time"},"updated_at":{"type":"string","format":"date-time"}}},"PublicProfile":{"type":"object","required":["id"],"description":"Public profile columns read by screens/user (feed hero)","properties":{"id":{"type":"string","format":"uuid"},"username":{"type":["string","null"]},"avatar_url":{"type":["string","null"],"format":"uri"},"is_supporter":{"type":"boolean"},"created_at":{"type":"string","format":"date-time"},"updated_at":{"type":"string","format":"date-time"}}},"ProjectPage":{"type":"object","required":["data"],"properties":{"data":{"type":"array","items":{"$ref":"#/components/schemas/Project"}},"next_cursor":{"type":["string","null"]}}},"CreateBillingCheckoutRequest":{"type":"object","required":["amount_eur"],"properties":{"amount_eur":{"type":"integer","minimum":1,"maximum":1000,"description":"Whole euros to charge (1 EUR = 100 credits, 1 credit = 1 EUR-cent). Presets in the app: 5, 20, 100, 200 — any integer 1..1000 accepted for custom amounts. Always charged in EUR.\n","example":20},"success_url":{"type":"string","format":"uri","description":"Deep-link or https URL Stripe redirects to after payment. May contain `{CHECKOUT_SESSION_ID}` placeholder. Defaults to server `BILLING_SUCCESS_URL` when omitted.\n"},"cancel_url":{"type":"string","format":"uri","description":"URL Stripe redirects to on cancel. Defaults to server `BILLING_CANCEL_URL` when omitted.\n"}}},"BillingCheckout":{"type":"object","required":["session_id","checkout_url","amount_cents","credits","currency"],"properties":{"session_id":{"type":"string","description":"Stripe Checkout Session id (`cs_*`)"},"checkout_url":{"type":"string","format":"uri","description":"Open this URL in a browser to collect payment"},"amount_cents":{"type":"integer","description":"Charged amount in euro cents","example":2000},"credits":{"type":"integer","description":"Credits the wallet receives once paid (1 EUR = 100 credits)","example":2000},"currency":{"type":"string","enum":["eur"],"example":"eur"}}},"Error":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"Machine-readable error code (e.g. `job_not_found`)"},"message":{"type":"string","description":"Human-readable detail"},"details":{"type":"object","additionalProperties":true}}}},"responses":{"BadRequest":{"description":"Invalid request payload","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}},"Unauthorized":{"description":"Missing, expired or invalid token / signature","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}},"NotFound":{"description":"Resource does not exist (or is not visible to this token)","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}},"RateLimited":{"description":"Quota exceeded; retry after the indicated time","headers":{"Retry-After":{"schema":{"type":"integer"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Error"}}}}}}}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Michelangelo Public API",
+    "version": "0.1.0",
+    "description": "Public API of the Michelangelo platform. This is the stable contract for the community: plugins, SDKs, MCP servers and third-party apps integrate here — never directly with the underlying backend.\nDesign rules (see ADR 0001): - Every long-running operation is an async **job** with state in the DB. - Auth is OAuth 2.1 + PKCE (Supabase as identity provider); tokens are\n  standard Supabase JWTs validated via JWKS.\n- All routes are versioned under `/v1`. Breaking changes ship as `/v2`.\n",
+    "contact": {
+      "name": "Michelangelo Community"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.michelangelo.land/v1",
+      "description": "Production"
+    },
+    {
+      "url": "https://michelangelo-api.giacomo-sardo98.workers.dev/v1",
+      "description": "Default workers.dev endpoint"
+    }
+  ],
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Identity introspection for the current token"
+    },
+    {
+      "name": "billing",
+      "description": "Wallet top-ups via Stripe Checkout (EUR)"
+    },
+    {
+      "name": "docs",
+      "description": "Machine-readable contract and interactive reference"
+    },
+    {
+      "name": "github",
+      "description": "GitHub App installs, linked repos and inbound webhooks"
+    },
+    {
+      "name": "integrations",
+      "description": "Supabase-account OAuth and project links"
+    },
+    {
+      "name": "jobs",
+      "description": "Async long-running operations (prompts, builds, AI runs)"
+    },
+    {
+      "name": "moderation",
+      "description": "Reports and blocks (community safety)"
+    },
+    {
+      "name": "notifications",
+      "description": "In-app notifications and Expo push tokens"
+    },
+    {
+      "name": "projects",
+      "description": "Michelangelo projects owned by the authenticated user"
+    },
+    {
+      "name": "usage",
+      "description": "Consumption summaries backed by usage_events RPCs"
+    },
+    {
+      "name": "users",
+      "description": "Current user profile with sparse fieldsets"
+    },
+    {
+      "name": "wallets",
+      "description": "Credit balance and transaction history"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness check — no authentication required",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "API is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "docs"
+        ],
+        "operationId": "getOpenApiDocument",
+        "summary": "OpenAPI document as JSON — SDK generator feed",
+        "description": "Serves this very contract (`openapi/v1.yaml`) as JSON. Feed it to OpenAPI Generator, hey-api, orval, Postman/Insomnia — or open `GET /v1/docs` — to build a client without asking anyone. No authentication required.\n",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": [
+          "docs"
+        ],
+        "operationId": "getDocs",
+        "summary": "Interactive API reference (Scalar)",
+        "description": "Human-friendly reference rendered from `GET /v1/openapi.json`. No authentication required to open it (calling the listed endpoints still needs a token).\n",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "HTML page hosting the Scalar API reference",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whoami": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "getWhoami",
+        "summary": "Return the identity behind the current access token",
+        "description": "Cheap endpoint for clients to validate a token and discover the user, the OAuth client it was issued to, and the granted scopes. Backed by JWKS validation only — no upstream call required.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current token identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Whoami"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "getMe",
+        "summary": "Get current user profile — sparse fieldsets",
+        "description": "Returns the authenticated user's profile (`user_id` always included). Pass `?fields=username,email,avatar_url` to fetch only what you need: `email` comes straight from the validated JWT (zero DB cost), `username`/`avatar_url` are read from `public.profiles` with a column-select limited to the requested fields. Omit `fields` to get everything at once. Unknown field names → 400 `invalid_fields`. Data sources verified on Supabase: `username`+`avatar_url` live in `public.profiles` (e.g. `jack` → `.../storage/v1/object/public/avatars/...`), `email` lives only in `auth.users` so the API serves the JWT `email` claim instead of hitting `auth.*` over PostgREST.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Comma-separated subset of `username,email,avatar_url`. Example: `?fields=username,email`. Omit for the full profile.\n",
+            "schema": {
+              "type": "string",
+              "example": "username,email"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current user profile (only requested fields + user_id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "updateMe",
+        "summary": "Update current user profile (username, avatar_url)",
+        "description": "Updates `public.profiles` as the user (RLS `Users can update own profile`). Accepts `username` (3..30 chars, `^[a-z0-9][a-z0-9_.]{1,28}[a-z0-9]$`) and/or `avatar_url` (public URL or null to remove). Mirrors `src/screens/settings/edit-username.tsx` + `edit-profile.tsx` in michelangelo-app. Duplicate username → 409 `username_taken`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Username already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "deleteMe",
+        "summary": "Delete account and data (proxies delete-account edge)",
+        "description": "Proxies the Supabase `delete-account` edge function with the user JWT (no body). The edge removes files, notifications, github links, avatar objects, then `auth.admin.deleteUser` (cascades profiles, projects, usage_events, subscriptions, reshares, reports, blocks).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Account deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "502": {
+            "description": "Upstream delete failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/avatar": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "uploadMyAvatar",
+        "summary": "Upload avatar file (multipart) → public URL",
+        "description": "Accepts `multipart/form-data` with a single `file` field (png/jpeg/webp, max 5MB — same limits as `edit-profile.tsx:uploadImage`). Uploads to the public `avatars` bucket at `{user_id}/avatar_{ts}.{ext}` via service role, then updates `profiles.avatar_url` with the public URL. Returns the URL.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Avatar uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "avatar_url"
+                  ],
+                  "properties": {
+                    "avatar_url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/users/{userId}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "getPublicProfile",
+        "summary": "Public profile by id (mirrors screens/user feed hero)",
+        "description": "Selects `id,username,avatar_url,is_supporter,created_at,updated_at` from `public.profiles` — the exact column set `screens/user/index.tsx` reads. RLS `Profiles are viewable by everyone`, so any authenticated caller can read any profile (needed by explore feed, preview and user screens). Pairs with the `author` embed on Project.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "createJob",
+        "summary": "Create an async job",
+        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt`: `input.prompt` is evaluated server-side (invalid → 400, quota → 429, overdraft floor → 402 `insufficient_credits`). Small overdraft is allowed: a user with 1 cent still runs and goes negative, the next top-up absorbs the red. When `project_id` is omitted (first generation) and the prompt is valid, the server creates the project synchronously via RPC `create_project` with the default template files and the evaluated `app_name`, fires icon generation fire-and-forget, then enqueues the job with the new `project_id` — so the runner always sees an edit and the client gets `project_id` immediately. Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and         `expo_push_token` (stored in `input`, used for completion push). Top-level `live_activity_token`, `live_activity_user` and `supabase_project_ref` are folded into `input` the same way (top-level wins on conflict with `input` keys); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePromptJobRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent replay — existing job for idempotency_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Job accepted and queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "description": "Insufficient credits — top up (overdraft floor reached)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/jobs/attachments": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "uploadJobAttachments",
+        "summary": "Upload prompt images (multipart) → manifest",
+        "description": "Accepts `multipart/form-data` with up to 3 image files (png/jpeg/webp, max 5MB each — same limits as `uploadPromptAttachments` in michelangelo-app). Optional text field `idempotency_key` (uuid, generated server-side when omitted). Uploads each to the private `job-attachments` bucket at `{user_id}/{idempotency_key}/image-{i}.{ext}` and returns the manifest to pass as `attachments` in `POST /v1/jobs` (`type=prompt`). Files stay in the transient bucket until the runner downloads and deletes them.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "files": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Manifest of stored attachments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentsManifest"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/jobs/{jobId}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "getJob",
+        "summary": "Get job status",
+        "description": "Polling endpoint. Clients should poll with backoff (suggested: 2s → 30s max). A future version may offer realtime delivery (SSE / Realtime) without changing this contract.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listProjects",
+        "summary": "List projects of the authenticated user",
+        "description": "Returns the authenticated user's own projects by default (`visibility=mine`). Pass `visibility=all` to also include public/shared community projects. RLS of the underlying backend applies on top: users can never see other people's private rows.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "description": "`mine` (default): only the caller's own projects. `all`: own projects plus public/shared community projects.\n",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mine",
+                "all"
+              ],
+              "default": "mine"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Full-text query via RPC match_project (RLS still applies)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "createProject",
+        "summary": "Create a project (insert public.projects)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/billing/checkouts": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "createBillingCheckout",
+        "summary": "Create a Stripe Checkout Session for wallet top-up",
+        "description": "Creates a one-time EUR Checkout Session (`mode: payment`) for the authenticated user. The app opens `checkout_url` in a browser/Desktop webview. Supports preset amounts (5, 20, 100, 200 EUR — matching the existing Stripe prices) or any custom whole-euro amount via `amount_eur`. Conversion is fixed: 1 EUR = 100 credits (1 credit = 1 EUR-cent), credited to `wallets.balance` by the Stripe webhook (`checkout.session.completed`). Pass `success_url`/`cancel_url` to deep-link back into Desktop/michelangelo-app (defaults come from server env).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBillingCheckoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Checkout Session created — open checkout_url",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingCheckout"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/billing/webhooks": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "handleBillingWebhook",
+        "summary": "Stripe webhook — credits wallets on payment",
+        "description": "Stripe calls this endpoint (no auth — verified via `Stripe-Signature` against `STRIPE_WEBHOOK_SECRET`). Handles `checkout.session.completed` with `payment_status: paid`: idempotently inserts a `wallet_transactions` row (`reason: topup`) and increments `wallets.balance` by `credits` (1 EUR = 100 credits). Configure the URL in the Stripe Dashboard; keep the legacy Supabase `stripe-webhook` endpoint until traffic is migrated.\n",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Raw Stripe event payload (verified by signature)"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook received (or ignored for other event types)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookReceived"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad signature or malformed payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "getProject",
+        "summary": "Get a single project",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "updateProject",
+        "summary": "Rename / share (update public.projects)",
+        "description": "Mirrors `useRenameProject` (`{name}`) + `useToggleVisibility` (`{shared}`) in michelangelo-app. At least one of `name,shared` required. RLS: only the owner can update. The icon is server-managed (first generation + POST .../icon) — clients cannot set `icon_url` here.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "deleteProject",
+        "summary": "Delete a project (mirrors useDeleteProject)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/files": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listProjectFiles",
+        "summary": "List files of a project (+ updated_at)",
+        "description": "Selects `public.files` (`path,contents,type,updated_at`) ordered by path. Mirrors `use-project-files.ts` (which filters `type=CODE` client-side; pass `?type=CODE` for the same view). RLS: owner or shared project.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "example": "CODE"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Files of the project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProjectFile"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "saveProjectFiles",
+        "summary": "Save files (per-file update-then-insert upsert)",
+        "description": "Body `{files:[{path,contents,type}]}`. Per file: `PATCH ?project_id=eq.X&path=eq.Y`, if zero rows then `POST`. Same result as `use-project-files.ts` save (which issues one update per file).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveFilesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProjectFile"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/icon": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "generateProjectIcon",
+        "summary": "Generate + assign icon (proxies generate-project-icon edge)",
+        "description": "Proxies the Supabase `generate-project-icon` edge (`{project_id}`) with the user JWT. The edge reads `get_project_for_icon`, uploads `project-icons/{id}/{ts}.png`, then `update_project_icon`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Icon generation accepted (edge result proxied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectIconResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/pushes": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "pushProjectToGithub",
+        "summary": "Push project to linked GitHub repo (Snack bundle → GitHub)",
+        "description": "Synchronously invokes the `github-actions` push edge for a GitHub-linked project (same edge the app used to call directly). The project must be visible to the caller (RLS). Returns 201 with `{pushed, commit_sha}` on success. Short integration action — not a queued job, no polling needed.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Push completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubPushResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/reshares": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "reshareProject",
+        "summary": "Republish / share (insert project_reshares)",
+        "description": "Mirrors `use-reshare.ts`: inserts `{project_id,reshared_by_user_id,platform,share_metadata}`. Duplicate (same project+user+platform) → 200 with `deduped:true` instead of an error.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReshareRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reshare already recorded (idempotent replay)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deduped"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Reshare recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectReshare"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/preview-errors": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listPreviewErrors",
+        "summary": "Preview errors (select preview_errors)",
+        "description": "Mirrors `use-preview-errors.ts`: selects `id,message,stack,created_at` for the project (max 10, oldest first). Pure read — never mutates. To drain after rendering, call `DELETE` on the same path. RLS: project owner only.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preview errors of the project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PreviewError"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "drainPreviewErrors",
+        "summary": "Drain preview errors (delete after render)",
+        "description": "Deletes all preview errors of the project (what the app did with `?consume=true`). Idempotent. RLS: project owner only.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Drain result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "deleted_count"
+                  ],
+                  "properties": {
+                    "deleted_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/supabase-link": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "getProjectSupabaseLink",
+        "summary": "Supabase link of one project (safe columns only)",
+        "description": "Selects `project_id,supabase_project_ref,supabase_project_name,api_url` from `supabase_project_links`. Mirrors the app read (never `anon_key` over this route). 404 when the project has no link.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupabaseProjectLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/reports": {
+      "post": {
+        "tags": [
+          "moderation"
+        ],
+        "operationId": "createReport",
+        "summary": "Report content (insert reports)",
+        "description": "Mirrors `utils/project.ts:reportAlert`: inserts `{reporter_id,reported_project_id?,reported_user_id?,reason?}`. At least one target required. RLS `users can create reports`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Report recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/blocks": {
+      "post": {
+        "tags": [
+          "moderation"
+        ],
+        "operationId": "blockUser",
+        "summary": "Block a user (insert blocked_users)",
+        "description": "Mirrors `reportAlert` block path: inserts `{blocker_id,blocked_id}`. Duplicate → 200 `deduped:true`. Cannot block yourself → 400.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBlockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already blocked (idempotent replay)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deduped"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "User blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Block"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/token": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "exchangeGithubToken",
+        "summary": "OAuth code → token (secret never leaves the server)",
+        "description": "Proxies the Supabase `github-token-exchange` edge with the user JWT: `{code,redirect_uri?}` → `{access_token}`. The GitHub client secret stays in edge secrets, never ships to the app. Mirrors `getGitHubToken` in michelangelo-app.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "redirect_uri": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "GitHub user access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "access_token"
+                  ],
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/installations": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "listGithubInstallations",
+        "summary": "GitHub App installations of the user (safe columns only)",
+        "description": "Selects `id,login,avatar,name` from `github_installations` for the caller. Never exposes `ghu` (the stored OAuth token). Mirrors the installation picker in `components/github.tsx`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Installations of the user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GithubInstallation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "saveGithubInstallation",
+        "summary": "Store installation after OAuth (upsert github_installations)",
+        "description": "Replaces `storeInstallation` in `use-github-mutations.ts` (which no longer writes to the DB — it only returns `{installation_id,profile}`). Upserts `{id,user_id,ghu,login,avatar,name}` on conflict `id`; `user_id` is always forced from the JWT (client value ignored). `ghu` (user OAuth token) is write-only — never returned. The webhook edge only refreshes rows, so without this call installations would never exist.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveGithubInstallationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Installation stored (safe columns only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubInstallation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/repositories": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "listGithubRepositories",
+        "summary": "Repos linked by the user (via their installations)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Linked repositories of the user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GithubRepository"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "linkGithubRepository",
+        "summary": "Save selected repo (upsert github_repositories)",
+        "description": "Mirrors the link step in `use-github-mutations.ts`: verifies the installation belongs to the caller, then upserts `{project_id,github_installation_id,github_repository_name,github_last_sync}` on conflict `project_id`. Defaults `github_repository_name` to `michelangelo-{project_id}` (app convention) when omitted.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkGithubRepositoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Repository linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubRepository"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Project or installation not found — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/github/repositories/{projectId}": {
+      "delete": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "unlinkGithubRepository",
+        "summary": "Unlink repo from a project (delete github_repositories)",
+        "description": "Unblocks `useGitHubDisconnect` (which throws until this exists). Deletes the link row for the path `projectId` scoped to the caller's installations (a user can only unlink their own links). Idempotent: 204 even when no link exists.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Repository unlinked (idempotent)"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/webhooks": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "handleGithubWebhook",
+        "summary": "GitHub events (HMAC verified, no JWT — proxies github-webhook edge)",
+        "description": "GitHub calls this endpoint (no auth — verified via `X-Hub-Signature-256` HMAC-SHA256 against `GITHUB_WEBHOOK_SECRET`, then forwarded to the Supabase `github-webhook` edge, which refreshes `github_installations` profile fields on `installation.created` and deletes the row on `installation.deleted`). Configure the URL in the GitHub App settings.\n",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Raw GitHub event payload (signature verified)"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook received",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookReceived"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad signature or malformed payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/supabase/authorizations": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "createSupabaseAuthorization",
+        "summary": "Start Supabase-account OAuth (proxies connect-supabase/login edge)",
+        "description": "Proxies `GET connect-supabase/login` with the caller id from the JWT (`user_id`) plus the app PKCE `code_challenge`/`code_verifier?`. Returns `{authorize_url,return_url}` — the app opens `authorize_url` via `openAuthSessionAsync` and the edge deep-links back to `michelangelo://supabase-connected` after the callback stores the connection (tokens stay server-side in `supabase_connections`).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code_challenge"
+                ],
+                "properties": {
+                  "code_challenge": {
+                    "type": "string"
+                  },
+                  "code_verifier": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OAuth authorize URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "authorize_url",
+                    "return_url"
+                  ],
+                  "properties": {
+                    "authorize_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "return_url": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/integrations/supabase/projects": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "listSupabaseProjects",
+        "summary": "User's Supabase projects (proxies connect-supabase/projects)",
+        "description": "Proxies `GET connect-supabase/projects` with the user JWT (the edge refreshes the OAuth token as needed). Returns `{projects:[{ref,name,region,created_at,linked_project_id}],organizations}`. 404 `not_connected` when the Supabase account is not linked.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Supabase projects of the user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupabaseProjectsResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Supabase account not connected — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/supabase/links": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "linkSupabaseProject",
+        "summary": "Link app ↔ Supabase ref (proxies connect-supabase/link)",
+        "description": "Proxies `POST connect-supabase/link` (`{project_id,supabase_ref}`) with the user JWT. The edge verifies project ownership, Supabase-account ownership, 1:1 uniqueness (409 `already_linked`) and fetches the anon key server-side, then upserts `supabase_project_links`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkSupabaseProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupabaseLinkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Project not found or Supabase not connected — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Supabase project already backs another app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/supabase/links/{projectId}": {
+      "delete": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "unlinkSupabaseProject",
+        "summary": "Unlink app ↔ Supabase ref (delete supabase_project_links)",
+        "description": "Unblocks `useSupabaseUnlink` (which throws until this exists). Deletes the link row for the path `projectId` scoped to the caller (RLS `Users can manage own supabase project links`). Idempotent: 204 even when no link exists.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project unlinked (idempotent)"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/integrations/supabase/connection": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "getSupabaseConnection",
+        "summary": "Connection state (safe columns of supabase_connections)",
+        "description": "Selects `supabase_user_id,supabase_username` for the caller (never the OAuth tokens). `{connected:false}` when no row exists. Mirrors `use-supabase-connection.ts`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupabaseConnection"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/wallets/me": {
+      "get": {
+        "tags": [
+          "wallets"
+        ],
+        "operationId": "getMyWallet",
+        "summary": "Balance + bonus (select wallets)",
+        "description": "Mirrors `use-credit-balance.ts:fetchCreditBalance` wallet leg: selects `balance,bonus_balance,bonus_expires_at` for the caller. Expired bonus is reported as 0 bonus (same rule as RPC `get_wallet_balance`). Unit is EUR-cent credits (1 EUR = 100 credits); `display_*` fields are preformatted server-side with `Intl.it-IT EUR` — clients render them verbatim and never compute `balance/100` themselves. New signups get a 500-credit (€5.00) welcome bonus valid 30 days; spend consumes bonus first, then paid balance, which may go down to −500 (−€5.00 overdraft) before `POST /jobs` returns `402 insufficient_credits`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wallet snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Wallet"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/wallets/me/transactions": {
+      "get": {
+        "tags": [
+          "wallets"
+        ],
+        "operationId": "listMyTransactions",
+        "summary": "Top-up/bonus/spend history (select wallet_transactions)",
+        "description": "Full ledger of the caller: `topup` rows (Stripe Checkout via `POST /billing/checkouts`, fulfilled by the webhook — `metadata` carries `stripe_session_id` and `amount_eur`), `bonus` rows (welcome credit), and `spend` rows (per-generation cost). Pass `?reason=spend` for expenses only, `?reason=topup` for top-ups, `?reason=bonus` for bonus grants; omit for everything. Every `spend` row is enriched server-side with `cost_eur` (\"1.05\") and `display_cost` (\"1,05 €\") derived from `abs(delta)` in integer credits — clients render `display_cost` verbatim so the user sees what each generation cost. RLS: callers see only their own rows.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "Filter by ledger reason (spend = expenses only)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "bonus",
+                "topup",
+                "spend",
+                "refund",
+                "migration",
+                "adjustment"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "ISO timestamp cursor over created_at",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WalletTransaction"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/usage/summary": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "operationId": "getUsageSummary",
+        "summary": "Consumption summary (RPC get_usage_summary)",
+        "description": "Proxies RPC `get_usage_summary(p_period,p_year,p_month)` as the user (`auth.uid()` inside). Mirrors `context/usage.tsx` (`month` + `all`).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "month",
+                "week",
+                "all"
+              ],
+              "default": "month"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage summary row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/usage/contributions": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "operationId": "getUsageContributions",
+        "summary": "Daily contributions (RPC get_usage_contributions)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daily run/token counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UsageContribution"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/usage/insights": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "operationId": "getUsageInsights",
+        "summary": "Insights (RPC get_usage_insights)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "timezone",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "UTC"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Insight row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageInsights"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "listNotifications",
+        "summary": "List notifications (cursor, mirrors push-notifications.tsx)",
+        "description": "Selects `notifications` for the caller ordered by `created_at` desc (limit 50 max client-side; API default 20). Includes `sender{username,avatar_url}` expansion.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "ISO timestamp cursor over created_at",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Notification"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "markAllNotificationsRead",
+        "summary": "Mark all as read (bulk update, mirrors markAllAsRead)",
+        "description": "Mirrors `markAllAsRead` in `push-notifications.tsx` (fired on blur of the notifications screen): sets `is_read=true` on all unread rows of the caller. Only `{is_read:true}` is accepted. Returns the updated count.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "is_read"
+                ],
+                "properties": {
+                  "is_read": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk update result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "updated_count"
+                  ],
+                  "properties": {
+                    "updated_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/notifications/unread-count": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "getUnreadCount",
+        "summary": "Badge count (RPC get_unread_notifications_count)",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unread badge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "unread_count"
+                  ],
+                  "properties": {
+                    "unread_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/notifications/{notificationId}": {
+      "patch": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "markNotificationRead",
+        "summary": "Mark read (update notifications)",
+        "description": "Mirrors single-read (`update{is_read:true}.eq(id).eq(recipient_id)`) in `push-notifications.tsx`. Body `{is_read:true}` (only true supported — unread is a fresh row, not a toggle).\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "notificationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "is_read"
+                ],
+                "properties": {
+                  "is_read": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated notification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/push-tokens": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "registerPushToken",
+        "summary": "Register Expo token (upsert expo_push_tokens)",
+        "description": "Mirrors `savePushToken`/`savePushTokenToDB`: upserts `{user_id,token,device_type?,is_active:true,last_used_at,locale?,time_zone?}` on conflict `token`. RLS `Users can manage own push tokens`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPushTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Token registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/push-tokens/{token}": {
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "removePushToken",
+        "summary": "Remove token (mirrors logout path)",
+        "description": "Deletes the caller's push token. `token` is URL-encoded (e.g. `ExponentPushToken%5Bx%5D`). Idempotent: 204 even when the token does not exist.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Token removed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "oauth2": {
+        "type": "oauth2",
+        "description": "OAuth 2.1 authorization code flow with PKCE, issued by the Michelangelo auth server on auth.michelangelo.land — the upstream backend is an implementation detail. Third-party clients register via Dynamic Client Registration at /auth/v1/oauth/clients/register. Data APIs live under api.michelangelo.land/v1.\n",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://auth.michelangelo.land/auth/v1/oauth/authorize",
+            "tokenUrl": "https://auth.michelangelo.land/auth/v1/oauth/token",
+            "scopes": {}
+          }
+        }
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Supabase-issued JWT, validated by the API via JWKS"
+      }
+    },
+    "parameters": {
+      "JobId": {
+        "name": "jobId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "schemas": {
+      "Whoami": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "client_id"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "client_id": {
+            "type": "string",
+            "description": "OAuth client the token was issued to"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rate_limit": {
+            "type": "object",
+            "description": "Current quota snapshot for this client (when available)",
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "remaining": {
+                "type": "integer"
+              },
+              "reset_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "user_id"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Auth user id (JWT sub, matches public.profiles.id)"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Username from public.profiles (e.g. `jack`)"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email",
+            "description": "Email from the validated JWT (mirrors auth.users.email)"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri",
+            "description": "Public avatar URL from public.profiles.avatar_url (bucket `avatars`)"
+          }
+        }
+      },
+      "UpdateMeRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 30,
+            "pattern": "^[a-z0-9][a-z0-9_.]{1,28}[a-z0-9]$"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "shared": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "shared": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProjectFile": {
+        "type": "object",
+        "required": [
+          "path",
+          "contents"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "contents": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "example": "CODE"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SaveFilesRequest": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "contents"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contents": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "default": "CODE"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ReshareRequest": {
+        "type": "object",
+        "required": [
+          "platform"
+        ],
+        "properties": {
+          "platform": {
+            "type": "string",
+            "minLength": 1
+          },
+          "share_metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CreateReportRequest": {
+        "type": "object",
+        "properties": {
+          "reported_project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reported_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateBlockRequest": {
+        "type": "object",
+        "required": [
+          "blocked_id"
+        ],
+        "properties": {
+          "blocked_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "Wallet": {
+        "type": "object",
+        "required": [
+          "balance",
+          "bonus_balance",
+          "total",
+          "currency",
+          "balance_eur",
+          "display_total"
+        ],
+        "description": "Wallet snapshot in minor units. 1 credit = 1 EUR-cent. Money math never uses floats: clients render `display_total` / `display_balance` verbatim and never divide `balance` themselves.\n",
+        "properties": {
+          "balance": {
+            "type": "integer",
+            "description": "Paid balance in EUR-cent credits"
+          },
+          "bonus_balance": {
+            "type": "integer",
+            "description": "Bonus in EUR-cent credits (0 when expired)"
+          },
+          "bonus_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "total": {
+            "type": "integer",
+            "description": "balance + bonus_balance in EUR-cent credits"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "eur"
+            ]
+          },
+          "balance_eur": {
+            "type": "string",
+            "description": "Paid balance as decimal EUR string with 2 decimals (no float)",
+            "example": "10.10"
+          },
+          "display_balance": {
+            "type": "string",
+            "description": "Preformatted balance for direct rendering (it-IT)",
+            "example": "10,10 €"
+          },
+          "display_total": {
+            "type": "string",
+            "description": "Preformatted total for direct rendering (it-IT)",
+            "example": "10,10 €"
+          }
+        }
+      },
+      "WalletTransaction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "delta": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "bonus",
+              "topup",
+              "spend",
+              "refund",
+              "migration",
+              "adjustment"
+            ]
+          },
+          "credits": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "product_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Spend rows carry run_id, model, provider; topup rows carry stripe_session_id and amount_eur.\n",
+            "additionalProperties": true
+          },
+          "cost_eur": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Spend rows only — absolute cost as decimal EUR string with 2 decimals, enriched server-side from abs(delta) (no float). Null/absent on non-spend rows.\n",
+            "example": "1.05"
+          },
+          "display_cost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Spend rows only — preformatted cost for direct rendering (it-IT). Clients render verbatim.\n",
+            "example": "1,05 €"
+          }
+        }
+      },
+      "UsageSummary": {
+        "type": "object",
+        "properties": {
+          "period_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "run_count": {
+            "type": "integer"
+          },
+          "generation_count": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "type": "integer"
+          },
+          "cache_creation_tokens": {
+            "type": "integer"
+          },
+          "has_usage_data": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UsageContribution": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date"
+          },
+          "run_count": {
+            "type": "integer"
+          },
+          "total_tokens": {
+            "type": "integer"
+          }
+        }
+      },
+      "UsageInsights": {
+        "type": "object",
+        "properties": {
+          "lines_of_code": {
+            "type": "integer"
+          },
+          "files_count": {
+            "type": "integer"
+          },
+          "current_streak": {
+            "type": "integer"
+          },
+          "best_streak": {
+            "type": "integer"
+          },
+          "best_month": {
+            "type": "string"
+          },
+          "best_month_apps": {
+            "type": "integer"
+          },
+          "peak_hour": {
+            "type": "integer"
+          }
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "is_read": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sender": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "RegisterPushTokenRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1
+          },
+          "device_type": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ]
+          },
+          "locale": {
+            "type": "string"
+          },
+          "time_zone": {
+            "type": "string"
+          }
+        }
+      },
+      "JobAttachmentRef": {
+        "type": "object",
+        "required": [
+          "path",
+          "mime",
+          "size_bytes"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Storage path in the job-attachments bucket (from POST /jobs/attachments)"
+          },
+          "mime": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "default": "image"
+          }
+        }
+      },
+      "CreatePromptJobRequest": {
+        "type": "object",
+        "required": [
+          "type",
+          "input"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "prompt"
+            ]
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric project id (matches public.projects.id). Omit for first generation — the server creates the project and returns its id on the job row."
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "prompt"
+            ],
+            "properties": {
+              "prompt": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string",
+                "enum": [
+                  "light",
+                  "full"
+                ]
+              },
+              "app_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "App name generated on first generation (snake_case)"
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Alias of app_name for runner compat (v9 enqueue shape)"
+              },
+              "is_first_generation": {
+                "type": "boolean",
+                "description": "True when the server created the project in this request"
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 3,
+            "description": "Manifest entries from POST /jobs/attachments (stored in job_attachments + input.attachment_refs)",
+            "items": {
+              "$ref": "#/components/schemas/JobAttachmentRef"
+            }
+          },
+          "expo_push_token": {
+            "type": "string",
+            "description": "Expo push token notified on completion (stored in input, mirrors sendPrompt)"
+          },
+          "live_activity_token": {
+            "type": "string",
+            "description": "Live Activity push token (stored in input.live_activity_token, mirrors v9 enqueue)"
+          },
+          "live_activity_user": {
+            "type": "string",
+            "description": "Live Activity user id (stored in input.live_activity_user, mirrors v9 enqueue)"
+          },
+          "supabase_project_ref": {
+            "type": "string",
+            "description": "Linked Supabase ref for the runner (stored in input.supabase_project_ref, mirrors v9 enqueue)"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client-generated v4 uuid (mirrors prompt idempotency); replay returns the existing job"
+          }
+        }
+      },
+      "AttachmentsManifest": {
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "attachments"
+        ],
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobAttachmentRef"
+            }
+          }
+        }
+      },
+      "PreviewError": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": "string"
+          },
+          "stack": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectReshare": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "reshared_by_user_id",
+          "platform"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reshared_by_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "share_metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "Report": {
+        "type": "object",
+        "required": [
+          "reporter_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reporter_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reported_project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reported_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true
+      },
+      "Block": {
+        "type": "object",
+        "required": [
+          "blocker_id",
+          "blocked_id"
+        ],
+        "properties": {
+          "blocker_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "blocked_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true
+      },
+      "Deduped": {
+        "type": "object",
+        "description": "Idempotent replay — the row already existed",
+        "required": [
+          "deduped"
+        ],
+        "properties": {
+          "deduped": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectIconResult": {
+        "type": "object",
+        "description": "Edge result proxied verbatim (known field documented, extra keys preserved)",
+        "properties": {
+          "icon_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": true
+      },
+      "SupabaseProjectsResult": {
+        "type": "object",
+        "description": "Edge result proxied verbatim (known fields documented, extra keys preserved)",
+        "required": [
+          "projects"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "organizations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "SupabaseLinkResult": {
+        "type": "object",
+        "description": "Project id plus edge result proxied verbatim",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "PushToken": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "device_type": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ]
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "time_zone": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "WebhookReceived": {
+        "type": "object",
+        "required": [
+          "received"
+        ],
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        }
+      },
+      "GithubInstallation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GithubRepository": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_installation_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_repository_name": {
+            "type": "string"
+          },
+          "github_last_sync": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GithubPushResult": {
+        "type": "object",
+        "required": [
+          "pushed"
+        ],
+        "properties": {
+          "pushed": {
+            "type": "boolean"
+          },
+          "commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Commit SHA created on GitHub (null when nothing pushed)"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LinkGithubRepositoryRequest": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "github_installation_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_installation_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "github_repository_name": {
+            "type": "string",
+            "description": "Defaults to michelangelo-{project_id} (app convention)"
+          }
+        }
+      },
+      "SaveGithubInstallationRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "ghu"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "GitHub App installation id (upserted on conflict id)"
+          },
+          "ghu": {
+            "type": "string",
+            "description": "User OAuth token (write-only, stored server-side, never returned)"
+          },
+          "login": {
+            "type": "string"
+          },
+          "avatar": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SupabaseProjectLink": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "supabase_project_ref": {
+            "type": "string"
+          },
+          "supabase_project_name": {
+            "type": "string"
+          },
+          "api_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "LinkSupabaseProjectRequest": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "supabase_ref"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "supabase_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "SupabaseConnection": {
+        "type": "object",
+        "required": [
+          "connected"
+        ],
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "supabase_user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supabase_username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "canceled"
+            ]
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric project id (matches public.projects.id). Always set for type=prompt — auto-created on first generation, nullable only for legacy rows."
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric project id (matches public.projects.id)"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owner id (needed by feed/user screens to fetch the author profile)"
+          },
+          "shared": {
+            "type": "boolean",
+            "description": "Community visibility (preview/feed only show shared projects)"
+          },
+          "icon_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "author": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Embedded author profile (username, avatar_url) via projects_user_id_fkey",
+            "properties": {
+              "username": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "avatar_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uri"
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PublicProfile": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "description": "Public profile columns read by screens/user (feed hero)",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "is_supporter": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectPage": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CreateBillingCheckoutRequest": {
+        "type": "object",
+        "required": [
+          "amount_eur"
+        ],
+        "properties": {
+          "amount_eur": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "Whole euros to charge (1 EUR = 100 credits, 1 credit = 1 EUR-cent). Presets in the app: 5, 20, 100, 200 — any integer 1..1000 accepted for custom amounts. Always charged in EUR.\n",
+            "example": 20
+          },
+          "success_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Deep-link or https URL Stripe redirects to after payment. May contain `{CHECKOUT_SESSION_ID}` placeholder. Defaults to server `BILLING_SUCCESS_URL` when omitted.\n"
+          },
+          "cancel_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL Stripe redirects to on cancel. Defaults to server `BILLING_CANCEL_URL` when omitted.\n"
+          }
+        }
+      },
+      "BillingCheckout": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "checkout_url",
+          "amount_cents",
+          "credits",
+          "currency"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Stripe Checkout Session id (`cs_*`)"
+          },
+          "checkout_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Open this URL in a browser to collect payment"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "description": "Charged amount in euro cents",
+            "example": 2000
+          },
+          "credits": {
+            "type": "integer",
+            "description": "Credits the wallet receives once paid (1 EUR = 100 credits)",
+            "example": 2000
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "eur"
+            ],
+            "example": "eur"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Machine-readable error code (e.g. `job_not_found`)"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable detail"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request payload",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, expired or invalid token / signature",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource does not exist (or is not visible to this token)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Quota exceeded; retry after the indicated time",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

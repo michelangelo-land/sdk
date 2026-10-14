@@ -41,6 +41,16 @@ export interface JobInput {
   /** Generated app name (first generation only, snake_case); server-enriched when absent. */
   app_name?: string | null;
   /**
+   * Alias of `app_name` for runner compat (v9 enqueue shape, per swagger
+   * `#/components/schemas/CreatePromptJobRequest`). Prefer `app_name`.
+   */
+  project_name?: string | null;
+  /**
+   * True when the server created the project in this request (first
+   * generation with `project_id` omitted). Server-set — never send it.
+   */
+  is_first_generation?: boolean;
+  /**
    * @deprecated Use `app_name` (snake_case, per swagger
    * `#/components/schemas/CreatePromptJobRequest`). Kept for backwards
    * compatibility — the server ignores unknown keys.
@@ -105,7 +115,7 @@ export interface Job {
   id: string;
   type: string;
   status: JobStatus;
-  /** Numeric project id, nullable. */
+  /** Numeric project id. Always set for `type: "prompt"` (auto-created on first generation); nullable only for legacy rows. */
   project_id?: number | null;
   result?: Record<string, unknown>;
   error?: ApiErrorBody;
@@ -487,19 +497,38 @@ export interface Wallet {
   display_total: string;
 }
 
+export type WalletTransactionReason =
+  | "bonus"
+  | "topup"
+  | "spend"
+  | "refund"
+  | "migration"
+  | "adjustment";
+
 export interface WalletTransaction {
   id?: string;
   delta?: number;
-  reason?: "bonus" | "topup" | "spend" | "refund" | "migration" | "adjustment";
+  reason?: WalletTransactionReason;
   credits?: number | null;
   product_id?: string | null;
   created_at?: string;
   /**
-   * Spend rows carry `run_id`, `model`, `provider`, `cost_eur` ("1.05") and
-   * `display_cost` ("1,05 €") preformatted server-side — render
-   * `display_cost` verbatim. Top-up rows carry `stripe_session_id` + `amount_eur`.
+   * Spend rows carry `run_id`, `model`, `provider`; top-up rows carry
+   * `stripe_session_id` + `amount_eur` (per swagger
+   * `#/components/schemas/WalletTransaction`).
    */
   metadata?: Record<string, unknown>;
+  /**
+   * Spend rows only — absolute cost as decimal EUR string with 2 decimals
+   * ("1.05"), enriched server-side from `abs(delta)`. Null/absent on
+   * non-spend rows.
+   */
+  cost_eur?: string | null;
+  /**
+   * Spend rows only — preformatted cost for direct rendering (it-IT),
+   * e.g. "1,05 €". Render verbatim. Null/absent on non-spend rows.
+   */
+  display_cost?: string | null;
 }
 
 export interface WalletTransactionsPage {
@@ -508,6 +537,8 @@ export interface WalletTransactionsPage {
 }
 
 export interface ListTransactionsOptions {
+  /** Filter by ledger reason (`spend` = expenses only). Omit for everything. */
+  reason?: WalletTransactionReason;
   limit?: number;
   /** ISO timestamp cursor over created_at. */
   cursor?: string;
