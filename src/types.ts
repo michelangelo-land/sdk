@@ -477,24 +477,19 @@ export interface BillingCheckout {
 
 // --- wallets → `getMyWallet`/`listMyTransactions` ---
 // Unit is EUR-cent credits: 1 credit = 1 EUR-cent, 1 EUR = 100 credits.
-// Money math never uses floats — render `display_balance` / `display_total`
-// / `display_cost` verbatim (preformatted server-side, it-IT EUR).
+// Single balance — bonus grants (`reason: "bonus"`, e.g. gifts) credit the
+// same `balance` like a top-up, there is no separate bonus column.
+// Money math never uses floats — render `display_balance` verbatim
+// (preformatted server-side, it-IT EUR).
 
 export interface Wallet {
-  /** Paid balance in EUR-cent credits. */
+  /** Credit balance in EUR-cent credits. */
   balance: number;
-  /** Bonus in EUR-cent credits (0 when expired). */
-  bonus_balance: number;
-  bonus_expires_at?: string | null;
-  /** balance + bonus_balance in EUR-cent credits. */
-  total: number;
   currency: "eur";
-  /** Paid balance as decimal EUR string with 2 decimals (no float), e.g. "10.10". */
+  /** Balance as decimal EUR string with 2 decimals (no float), e.g. "10.10". */
   balance_eur: string;
   /** Preformatted balance for direct rendering (it-IT), e.g. "10,10 €". */
-  display_balance?: string;
-  /** Preformatted total for direct rendering (it-IT), e.g. "10,10 €". */
-  display_total: string;
+  display_balance: string;
 }
 
 export type WalletTransactionReason =
@@ -513,8 +508,9 @@ export interface WalletTransaction {
   product_id?: string | null;
   created_at?: string;
   /**
-   * Spend rows carry `run_id`, `model`, `provider`; top-up rows carry
-   * `stripe_session_id` + `amount_eur` (per swagger
+   * Spend rows carry `run_id`, `job_id`, `project_id`, `app_name` (snapshot),
+   * `is_first_generation` (create vs edit), `model`, `provider`; top-up rows
+   * carry `stripe_session_id` + `amount_eur` (per swagger
    * `#/components/schemas/WalletTransaction`).
    */
   metadata?: Record<string, unknown>;

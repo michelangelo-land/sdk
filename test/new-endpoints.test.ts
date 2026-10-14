@@ -333,13 +333,9 @@ describe("wallets + usage", () => {
       if (u.endsWith("/wallets/me")) {
         return json({
           balance: 1010,
-          bonus_balance: 0,
-          bonus_expires_at: null,
-          total: 1010,
           currency: "eur",
           balance_eur: "10.10",
           display_balance: "10,10 €",
-          display_total: "10,10 €",
         });
       }
       if (u.includes("/wallets/me/transactions")) {
@@ -353,8 +349,8 @@ describe("wallets + usage", () => {
     });
     const client = authed(fetchFn);
     const wallet = await client.getMyWallet();
-    assert.equal(wallet.total, 1010);
-    assert.equal(wallet.display_total, "10,10 €");
+    assert.equal(wallet.balance, 1010);
+    assert.equal(wallet.display_balance, "10,10 €");
     assert.equal(wallet.balance_eur, "10.10");
     const page = await client.listMyTransactions({ limit: 1 });
     assert.equal(page.data[0]?.id, "t1");

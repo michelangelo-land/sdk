@@ -2089,8 +2089,8 @@
           "wallets"
         ],
         "operationId": "getMyWallet",
-        "summary": "Balance + bonus (select wallets)",
-        "description": "Mirrors `use-credit-balance.ts:fetchCreditBalance` wallet leg: selects `balance,bonus_balance,bonus_expires_at` for the caller. Expired bonus is reported as 0 bonus (same rule as RPC `get_wallet_balance`). Unit is EUR-cent credits (1 EUR = 100 credits); `display_*` fields are preformatted server-side with `Intl.it-IT EUR` — clients render them verbatim and never compute `balance/100` themselves. New signups get a 500-credit (€5.00) welcome bonus valid 30 days; spend consumes bonus first, then paid balance, which may go down to −500 (−€5.00 overdraft) before `POST /jobs` returns `402 insufficient_credits`.\n",
+        "summary": "Balance (select wallets)",
+        "description": "Single credit balance: selects `balance` for the caller. Unit is EUR-cent credits (1 EUR = 100 credits); `display_balance` is preformatted server-side with `Intl.it-IT EUR` — clients render it verbatim and never compute `balance/100` themselves. Bonus credits (`reason: bonus` ledger rows, e.g. gifts) credit the same `balance` like a top-up — there is no separate bonus column. Balance may go down to −500 (−€5.00 overdraft) before `POST /jobs` returns `402 insufficient_credits`.\n",
         "security": [
           {
             "oauth2": []
@@ -2126,7 +2126,7 @@
         ],
         "operationId": "listMyTransactions",
         "summary": "Top-up/bonus/spend history (select wallet_transactions)",
-        "description": "Full ledger of the caller: `topup` rows (Stripe Checkout via `POST /billing/checkouts`, fulfilled by the webhook — `metadata` carries `stripe_session_id` and `amount_eur`), `bonus` rows (welcome credit), and `spend` rows (per-generation cost). Pass `?reason=spend` for expenses only, `?reason=topup` for top-ups, `?reason=bonus` for bonus grants; omit for everything. Every `spend` row is enriched server-side with `cost_eur` (\"1.05\") and `display_cost` (\"1,05 €\") derived from `abs(delta)` in integer credits — clients render `display_cost` verbatim so the user sees what each generation cost. RLS: callers see only their own rows.\n",
+        "description": "Full ledger of the caller: `topup` rows (Stripe Checkout via `POST /billing/checkouts`, fulfilled by the webhook — `metadata` carries `stripe_session_id` and `amount_eur`), `bonus` rows (free credit grants, e.g. gifts — they credit `balance` like a top-up), and `spend` rows (per-generation cost). Pass `?reason=spend` for expenses only, `?reason=topup` for top-ups, `?reason=bonus` for bonus grants; omit for everything. Every `spend` row is enriched server-side with `cost_eur` (\"1.05\") and `display_cost` (\"1,05 €\") derived from `abs(delta)` in integer credits — clients render `display_cost` verbatim so the user sees what each generation cost. RLS: callers see only their own rows.\n",
         "security": [
           {
             "oauth2": []
@@ -2960,32 +2960,15 @@
         "type": "object",
         "required": [
           "balance",
-          "bonus_balance",
-          "total",
           "currency",
           "balance_eur",
-          "display_total"
+          "display_balance"
         ],
-        "description": "Wallet snapshot in minor units. 1 credit = 1 EUR-cent. Money math never uses floats: clients render `display_total` / `display_balance` verbatim and never divide `balance` themselves.\n",
+        "description": "Wallet snapshot in minor units. 1 credit = 1 EUR-cent. Single balance — bonus grants credit the same balance. Money math never uses floats: clients render `display_balance` verbatim and never divide `balance` themselves.\n",
         "properties": {
           "balance": {
             "type": "integer",
-            "description": "Paid balance in EUR-cent credits"
-          },
-          "bonus_balance": {
-            "type": "integer",
-            "description": "Bonus in EUR-cent credits (0 when expired)"
-          },
-          "bonus_expires_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "total": {
-            "type": "integer",
-            "description": "balance + bonus_balance in EUR-cent credits"
+            "description": "Credit balance in EUR-cent credits"
           },
           "currency": {
             "type": "string",
@@ -2995,17 +2978,12 @@
           },
           "balance_eur": {
             "type": "string",
-            "description": "Paid balance as decimal EUR string with 2 decimals (no float)",
+            "description": "Balance as decimal EUR string with 2 decimals (no float)",
             "example": "10.10"
           },
           "display_balance": {
             "type": "string",
             "description": "Preformatted balance for direct rendering (it-IT)",
-            "example": "10,10 €"
-          },
-          "display_total": {
-            "type": "string",
-            "description": "Preformatted total for direct rendering (it-IT)",
             "example": "10,10 €"
           }
         }
@@ -3049,7 +3027,7 @@
           },
           "metadata": {
             "type": "object",
-            "description": "Spend rows carry run_id, model, provider; topup rows carry stripe_session_id and amount_eur.\n",
+            "description": "Spend rows carry run_id, job_id, project_id, app_name (snapshot), is_first_generation (create vs edit), model, provider; topup rows carry stripe_session_id and amount_eur.\n",
             "additionalProperties": true
           },
           "cost_eur": {

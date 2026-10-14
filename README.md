@@ -97,6 +97,12 @@ npm run example:node-login
 | notifications | `removePushToken` `DELETE /push-tokens/{token}` | `client.removePushToken(token)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
+> Migration notes (0.8.0): `GET /wallets/me` is now single-balance —
+> `bonus_balance`, `bonus_expires_at`, `total` and `display_total` are gone.
+> Bonus grants (`reason: "bonus"`) credit the same `balance` like a top-up.
+> Render `wallet.display_balance` (was `display_total`); `balance` /
+> `balance_eur` semantics unchanged.
+>
 > Migration notes (0.7.0): `GET /explore/projects` was removed — community
 > search is `listProjects({ visibility: "all", q })` (`listExploreProjects*`
 > remain as deprecated shims). `POST /integrations/supabase/login` was renamed
@@ -156,9 +162,10 @@ await client.reshareProject(12, { platform: "x" });
 await client.generateProjectIcon(12);
 
 // Wallet + usage + notifications (money in EUR-cent credits: 1 EUR = 100 credits,
-// render display_* verbatim — never divide balance yourself):
+// single balance — bonus grants credit the same balance, render display_*
+// verbatim — never divide balance yourself):
 const wallet = await client.getMyWallet();
-console.log(wallet.display_total); // e.g. "10,10 €"
+console.log(wallet.display_balance); // e.g. "10,10 €"
 const summary = await client.getUsageSummary({ period: "month" });
 const { unread_count } = await client.getUnreadCount();
 await client.registerPushToken({ token: expoPushToken, device_type: "ios" });

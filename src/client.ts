@@ -654,10 +654,11 @@ export class MichelangeloClient {
   }
 
   /**
-   * `GET /wallets/me` — balance + bonus in EUR-cent credits
-   * (1 credit = 1 EUR-cent). Expired bonus is reported as 0.
-   * Render `display_balance` / `display_total` verbatim (preformatted
-   * server-side, it-IT EUR) — never compute `balance / 100` yourself.
+   * `GET /wallets/me` — single credit balance in EUR-cent credits
+   * (1 credit = 1 EUR-cent). Bonus grants (`reason: "bonus"`, e.g. gifts)
+   * credit the same `balance` like a top-up — there is no separate bonus
+   * column. Render `display_balance` verbatim (preformatted server-side,
+   * it-IT EUR) — never compute `balance / 100` yourself.
    */
   getMyWallet(): Promise<Wallet> {
     return this.request<Wallet>("/wallets/me");
@@ -666,6 +667,7 @@ export class MichelangeloClient {
   /**
    * `GET /wallets/me/transactions` — full ledger (`topup`/`bonus`/`spend`/`refund`/`migration`/`adjustment`, cursor over created_at).
    * Pass `reason: "spend"` for expenses only; omit for everything.
+   * Bonus rows (`reason: "bonus"`, e.g. gifts) credit `balance` like a top-up.
    * Every `spend` row carries top-level `cost_eur` ("1.05") and preformatted
    * `display_cost` ("1,05 €") — render `display_cost` verbatim.
    */
