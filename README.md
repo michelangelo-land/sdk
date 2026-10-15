@@ -96,8 +96,23 @@ npm run example:node-login
 | notifications | `markAllNotificationsRead` `PATCH /notifications` | `client.markAllNotificationsRead()` → `{ updated_count }` | Bearer required |
 | notifications | `registerPushToken` `POST /push-tokens` | `client.registerPushToken({ token, device_type })` → 201 | Bearer required |
 | notifications | `removePushToken` `DELETE /push-tokens/{token}` | `client.removePushToken(token)` → void (204) | Bearer required |
+| live-activity | `listLiveActivityTokens` `GET /live-activity/tokens` | `client.listLiveActivityTokens()` | Bearer required |
+| live-activity | `registerLiveActivityToken` `POST /live-activity/tokens` | `client.registerLiveActivityToken({ push_to_start_token })` → 201 | Bearer required |
+| live-activity | `removeLiveActivityToken` `DELETE /live-activity/tokens/{token}` | `client.removeLiveActivityToken(token)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
+> Migration notes (0.11.0): new `live-activity` tag — `GET|POST
+> /live-activity/tokens` + `DELETE /live-activity/tokens/{token}`
+> (`listLiveActivityTokens()` / `registerLiveActivityToken()` /
+> `removeLiveActivityToken()`). Register the push-to-start token at
+> login/onboarding and refresh it at every launch; the server starts the Live
+> Activity via APNs when a job is inserted, even with the app closed.
+> `POST /jobs` lost its per-job push fields — `expo_push_token`,
+> `live_activity_token` and `live_activity_user` were removed from the swagger
+> (push routing now uses the registered `push-tokens` / `live-activity/tokens`
+> tables). They survive in the SDK only as the deprecated
+> `DeprecatedJobPushFields` helper — the server ignores them if still sent.
+>
 > Migration notes (0.10.0): `GET /prompt-suggestions` gained `?mode=create|edit`
 > and every `PromptSuggestion` now carries a required `mode`
 > (`create` = new-app ideas, `edit` = modify-current-app ideas).
@@ -146,14 +161,17 @@ if (!push.pushed) console.log("nothing to push", push.commit_sha);
 const manifest = await client.uploadJobAttachments({ files: [imageBlob] });
 await client.createJob({ type: "prompt", input: { prompt: "redesign this" }, attachments: manifest.attachments });
 
-// Prompt with Live Activity + linked Supabase ref (folded into `input` server-side):
+// Prompt with linked Supabase ref (folded into `input` server-side):
 await client.createJob({
   type: "prompt",
   input: { prompt: "add auth" },
-  live_activity_token,
-  live_activity_user,
   supabase_project_ref: "abcxyz",
 });
+
+// Push routing: register once at launch, not per job (POST /jobs no longer
+// takes expo_push_token / live_activity_* — the server reads these tables):
+await client.registerPushToken({ token: expoPushToken, device_type: "ios" });
+await client.registerLiveActivityToken({ push_to_start_token });
 
 // Author of a project (community cards show the `author` embed; `user_id` for the full hero):
 const author = project.author; // { username, avatar_url } | null

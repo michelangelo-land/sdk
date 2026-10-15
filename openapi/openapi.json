@@ -48,6 +48,10 @@
       "description": "Async long-running operations (prompts, builds, AI runs)"
     },
     {
+      "name": "live-activity",
+      "description": "Live Activity push-to-start tokens for background starts"
+    },
+    {
       "name": "moderation",
       "description": "Reports and blocks (community safety)"
     },
@@ -441,7 +445,7 @@
         ],
         "operationId": "createJob",
         "summary": "Create an async job",
-        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt`: `input.prompt` is evaluated server-side (invalid → 400, quota → 429, overdraft floor → 402 `insufficient_credits`). Small overdraft is allowed: a user with 1 cent still runs and goes negative, the next top-up absorbs the red. When `project_id` is omitted (first generation) and the prompt is valid, the server creates the project synchronously via RPC `create_project` with the default template files and the evaluated `app_name`, fires icon generation fire-and-forget, then enqueues the job with the new `project_id` — so the runner always sees an edit and the client gets `project_id` immediately. Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner) and         `expo_push_token` (stored in `input`, used for completion push). Top-level `live_activity_token`, `live_activity_user` and `supabase_project_ref` are folded into `input` the same way (top-level wins on conflict with `input` keys); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n",
+        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt`: `input.prompt` is evaluated server-side (invalid → 400, quota → 429, overdraft floor → 402 `insufficient_credits`). Small overdraft is allowed: a user with 1 cent still runs and goes negative, the next top-up absorbs the red. When `project_id` is omitted (first generation) and the prompt is valid, the server creates the project synchronously via RPC `create_project` with the default template files and the evaluated `app_name`, fires icon generation fire-and-forget, then enqueues the job with the new `project_id` — so the runner always sees an edit and the client gets `project_id` immediately. Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner). Top-level `supabase_project_ref` is folded into `input` the same way (top-level wins on conflict with the `input` key); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n",
         "security": [
           {
             "oauth2": []
@@ -2797,6 +2801,130 @@
           }
         }
       }
+    },
+    "/live-activity/tokens": {
+      "get": {
+        "tags": [
+          "live-activity"
+        ],
+        "operationId": "listLiveActivityTokens",
+        "summary": "List own Live Activity push-to-start tokens",
+        "description": "Returns the caller's active push-to-start tokens (`is_active=true`, most recently used first). Register with `POST` on the same path at every app launch; the server uses them to `start` a Live Activity via APNs when a job is inserted, even with the app closed.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active tokens of the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LiveActivityToken"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "live-activity"
+        ],
+        "operationId": "registerLiveActivityToken",
+        "summary": "Register push-to-start token (upsert live_activity_push_tokens)",
+        "description": "Upserts `{user_id,push_to_start_token,activity_type?,is_active:true,last_used_at}` on conflict `push_to_start_token`. Call at login/onboarding and refresh at every launch — the token survives app kills but rotates on reinstall/restore. RLS `Users can manage own live activity tokens`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterLiveActivityTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Token registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveActivityToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/live-activity/tokens/{token}": {
+      "delete": {
+        "tags": [
+          "live-activity"
+        ],
+        "operationId": "removeLiveActivityToken",
+        "summary": "Remove push-to-start token (mirrors logout path)",
+        "description": "Deletes the caller's push-to-start token. `token` is URL-encoded. Idempotent: 204 even when the token does not exist.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Token removed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3288,6 +3416,52 @@
           }
         }
       },
+      "RegisterLiveActivityTokenRequest": {
+        "type": "object",
+        "required": [
+          "push_to_start_token"
+        ],
+        "properties": {
+          "push_to_start_token": {
+            "type": "string",
+            "minLength": 1
+          },
+          "activity_type": {
+            "type": "string",
+            "default": "GenerationActivity"
+          }
+        }
+      },
+      "LiveActivityToken": {
+        "type": "object",
+        "required": [
+          "push_to_start_token"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "push_to_start_token": {
+            "type": "string"
+          },
+          "activity_type": {
+            "type": "string"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true
+      },
       "JobAttachmentRef": {
         "type": "object",
         "required": [
@@ -3379,18 +3553,6 @@
             "items": {
               "$ref": "#/components/schemas/JobAttachmentRef"
             }
-          },
-          "expo_push_token": {
-            "type": "string",
-            "description": "Expo push token notified on completion (stored in input, mirrors sendPrompt)"
-          },
-          "live_activity_token": {
-            "type": "string",
-            "description": "Live Activity push token (stored in input.live_activity_token, mirrors v9 enqueue)"
-          },
-          "live_activity_user": {
-            "type": "string",
-            "description": "Live Activity user id (stored in input.live_activity_user, mirrors v9 enqueue)"
           },
           "supabase_project_ref": {
             "type": "string",

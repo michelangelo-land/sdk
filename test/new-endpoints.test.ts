@@ -83,7 +83,7 @@ describe("users (new)", () => {
 });
 
 describe("jobs (new)", () => {
-  it("createJob is prompt-only (github-push moved to pushProjectToGithub)", async () => {
+  it("createJob is prompt-only (push tokens moved to registered tables)", async () => {
     let body: unknown = null;
     const fetchFn = stubFetch(async (_url, init) => {
       body = JSON.parse(String(init?.body));
@@ -92,14 +92,12 @@ describe("jobs (new)", () => {
     const job = await authed(fetchFn).createJob({
       type: "prompt",
       input: { prompt: "hi" },
-      live_activity_token: "lat",
       supabase_project_ref: "ref",
     });
     assert.equal(job.type, "prompt");
     assert.deepEqual(body, {
       type: "prompt",
       input: { prompt: "hi" },
-      live_activity_token: "lat",
       supabase_project_ref: "ref",
     });
   });
@@ -508,5 +506,37 @@ describe("prompt suggestions", () => {
     assert.equal(page.data[0]?.mode, "edit");
     const u = new URL(seenUrl);
     assert.equal(u.searchParams.get("mode"), "edit");
+  });
+});
+
+describe("live activity tokens", () => {
+  it("list/register/remove live-activity tokens", async () => {
+    let deleteUrl = "";
+    const fetchFn = stubFetch((url, init) => {
+      const u = String(url);
+      const method = init?.method ?? "GET";
+      if (u.endsWith("/live-activity/tokens") && method === "GET") {
+        return json({ data: [{ push_to_start_token: "pts-x", is_active: true }] });
+      }
+      if (u.endsWith("/live-activity/tokens") && method === "POST") {
+        assert.deepEqual(JSON.parse(String(init?.body)), { push_to_start_token: "pts-x" });
+        return json({ push_to_start_token: "pts-x", is_active: true }, 201);
+      }
+      if (u.includes("/live-activity/tokens/") && method === "DELETE") {
+        deleteUrl = u;
+        assert.equal(init?.body, undefined);
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected ${method} ${u}`);
+    });
+    const client = authed(fetchFn);
+    assert.equal((await client.listLiveActivityTokens()).data[0]?.push_to_start_token, "pts-x");
+    const reg = await client.registerLiveActivityToken({ push_to_start_token: "pts-x" });
+    assert.equal(reg.push_to_start_token, "pts-x");
+    assert.equal(await client.removeLiveActivityToken("pts-x"), undefined);
+    assert.ok(deleteUrl.endsWith("/live-activity/tokens/pts-x"), deleteUrl);
+    // object form as well
+    await client.removeLiveActivityToken({ token: "pts-y" });
+    assert.ok(deleteUrl.endsWith("/live-activity/tokens/pts-y"), deleteUrl);
   });
 });

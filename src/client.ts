@@ -34,6 +34,10 @@ import type {
   LinkSupabaseProjectRequest,
   LinkSupabaseProjectResponse,
   ListAllProjectsOptions,
+  LiveActivityTokensPage,
+  RegisterLiveActivityTokenRequest,
+  RegisterLiveActivityTokenResponse,
+  RemoveLiveActivityTokenRequest,
   ListExploreProjectsOptions,
   ListNotificationsOptions,
   ListProjectFilesOptions,
@@ -311,6 +315,10 @@ export class MichelangeloClient {
    * `waitForJob` for progress. Prompt-only: GitHub pushes moved to the
    * synchronous `POST /projects/{projectId}/pushes`
    * (`pushProjectToGithub`), not a queued job.
+   * Push routing (Expo + Live Activity) uses the registered token tables
+   * (`registerPushToken` / `registerLiveActivityToken` at every launch) —
+   * no per-job token fields. Extra `supabase_project_ref` is folded into
+   * `input` server-side.
    * 402 `insufficient_credits` when the overdraft floor is reached — top up
    * via `createBillingCheckout`. Small overdraft is allowed: a user with
    * 1 cent still runs and goes negative, the next top-up absorbs the red.
@@ -821,6 +829,45 @@ export class MichelangeloClient {
   async removePushToken(input: RemovePushTokenRequest | string): Promise<void> {
     const token = typeof input === "string" ? input : input.token;
     await this.request<void>(`/push-tokens/${encodeURIComponent(token)}`, { method: "DELETE" });
+  }
+
+  /**
+   * `GET /live-activity/tokens` — caller's active push-to-start tokens
+   * (`is_active=true`, most recently used first). The server uses them to
+   * `start` a Live Activity via APNs when a job is inserted, even with the
+   * app closed.
+   */
+  listLiveActivityTokens(): Promise<LiveActivityTokensPage> {
+    return this.request<LiveActivityTokensPage>("/live-activity/tokens");
+  }
+
+  /**
+   * `POST /live-activity/tokens` — register a push-to-start token (upsert on
+   * conflict `push_to_start_token`). Call at login/onboarding and refresh at
+   * every launch — the token survives app kills but rotates on
+   * reinstall/restore. `activity_type` defaults to `GenerationActivity`
+   * server-side when omitted.
+   */
+  registerLiveActivityToken(
+    input: RegisterLiveActivityTokenRequest,
+  ): Promise<RegisterLiveActivityTokenResponse> {
+    return this.request<RegisterLiveActivityTokenResponse>("/live-activity/tokens", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  /**
+   * `DELETE /live-activity/tokens/{token}` — remove a push-to-start token
+   * (`token` URL-encoded, mirrors the logout path). Idempotent: 204 even
+   * when the token does not exist. Accepts the raw token string or the
+   * legacy `{ token }` object form.
+   */
+  async removeLiveActivityToken(input: RemoveLiveActivityTokenRequest | string): Promise<void> {
+    const token = typeof input === "string" ? input : input.token;
+    await this.request<void>(`/live-activity/tokens/${encodeURIComponent(token)}`, {
+      method: "DELETE",
+    });
   }
 
   /**

@@ -73,16 +73,26 @@ export interface CreatePromptJobRequest {
   input: JobInput & Record<string, unknown>;
   /** Manifest entries from `POST /jobs/attachments`. */
   attachments?: JobAttachmentRef[];
-  /** Expo push token notified on completion (stored in input). */
-  expo_push_token?: string;
-  /** Live Activity push token (stored in `input.live_activity_token`). */
-  live_activity_token?: string;
-  /** Live Activity user id (stored in `input.live_activity_user`). */
-  live_activity_user?: string;
   /** Linked Supabase ref for the runner (stored in `input.supabase_project_ref`). */
   supabase_project_ref?: string;
   /** Client-generated uuid; replay with the same key returns the existing job. */
   idempotency_key?: string;
+}
+
+/**
+ * @deprecated `expo_push_token`, `live_activity_token` and `live_activity_user`
+ * were removed from `POST /jobs` — push routing now uses the registered
+ * token tables (`POST /push-tokens`, `POST /live-activity/tokens`).
+ * Register once at launch instead of passing per job; the server ignores
+ * these keys if still sent. Kept so existing call-sites still compile.
+ */
+export interface DeprecatedJobPushFields {
+  /** @deprecated Removed from the API — use `registerPushToken()` instead. */
+  expo_push_token?: string;
+  /** @deprecated Removed from the API — use `registerLiveActivityToken()` instead. */
+  live_activity_token?: string;
+  /** @deprecated Removed from the API — use `registerLiveActivityToken()` instead. */
+  live_activity_user?: string;
 }
 
 export interface CreateGithubPushJobRequest {
@@ -730,6 +740,37 @@ export interface PushToken {
 export type RegisterPushTokenResponse = PushToken;
 
 export interface RemovePushTokenRequest {
+  token: string;
+}
+
+// --- live-activity → `listLiveActivityTokens`/`registerLiveActivityToken`/`removeLiveActivityToken` ---
+
+/** `live_activity_push_tokens` row (safe columns). */
+export interface LiveActivityToken {
+  id?: string;
+  user_id?: string;
+  push_to_start_token: string;
+  activity_type?: string;
+  is_active?: boolean;
+  last_used_at?: string;
+  [key: string]: unknown;
+}
+
+/** `GET /live-activity/tokens` — caller's active push-to-start tokens. */
+export interface LiveActivityTokensPage {
+  data: LiveActivityToken[];
+}
+
+/** `POST /live-activity/tokens` — upsert on conflict `push_to_start_token`. */
+export interface RegisterLiveActivityTokenRequest {
+  push_to_start_token: string;
+  activity_type?: string;
+}
+
+/** `POST /live-activity/tokens` — registered row (201). */
+export type RegisterLiveActivityTokenResponse = LiveActivityToken;
+
+export interface RemoveLiveActivityTokenRequest {
   token: string;
 }
 

@@ -26,6 +26,7 @@ const EXPECTED = {
     "getSupabaseConnection", "getMyWallet", "listMyTransactions", "getUsageSummary",
     "getUsageContributions",     "getUsageInsights", "listNotifications", "getUnreadCount",
     "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
+    "listLiveActivityTokens", "registerLiveActivityToken", "removeLiveActivityToken",
   ],
   paths: [
     "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar", "/users/{userId}",
@@ -42,6 +43,7 @@ const EXPECTED = {
     "/wallets/me", "/wallets/me/transactions", "/usage/summary", "/usage/contributions",
     "/usage/insights", "/notifications", "/notifications/unread-count",
     "/notifications/{notificationId}", "/push-tokens", "/push-tokens/{token}",
+    "/live-activity/tokens", "/live-activity/tokens/{token}",
   ],
   // Client-covered operations. Deliberately skipped: getOpenApiDocument/getDocs
   // (meta) and handleBillingWebhook/handleGithubWebhook (signed server hooks).
@@ -58,6 +60,7 @@ const EXPECTED = {
     "getSupabaseConnection", "getMyWallet", "listMyTransactions", "getUsageSummary",
     "getUsageContributions", "getUsageInsights", "listNotifications", "getUnreadCount",
     "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
+    "listLiveActivityTokens", "registerLiveActivityToken", "removeLiveActivityToken",
     "createBillingCheckout", "saveGithubInstallation", "unlinkGithubRepository",
     "unlinkSupabaseProject",
   ],
