@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { AuthManager } from "../src/auth.js";
 import { MichelangeloClient } from "../src/client.js";
-import { MichelangeloApiError } from "../src/errors.js";
+import { MichelangeloApiError, MichelangeloAuthError } from "../src/errors.js";
 
 function stubFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): typeof fetch {
   return ((url: unknown, init?: unknown) => handler(url as string, init as RequestInit)) as typeof fetch;
@@ -87,6 +87,17 @@ describe("auth dynamic flow", () => {
     const auth = new AuthManager({ fetchFn });
     await auth.registerClient({ client_name: "t", redirect_uris: ["http://127.0.0.1/callback"] });
     assert.equal(auth.getClientId(), "new-client");
+  });
+
+  it("registerClient requests authorization_code + refresh_token by default", async () => {
+    let sentBody: Record<string, unknown> = {};
+    const fetchFn = stubFetch((_url, init) => {
+      sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return json({ client_id: "new-client" });
+    });
+    const auth = new AuthManager({ fetchFn });
+    await auth.registerClient({ client_name: "t", redirect_uris: ["http://127.0.0.1/callback"] });
+    assert.deepEqual(sentBody["grant_types"], ["authorization_code", "refresh_token"]);
   });
 });
 
@@ -187,5 +198,122 @@ describe("client token injection", () => {
     });
     const client = new MichelangeloClient({ fetchFn });
     assert.deepEqual(await client.health(), { ok: true });
+  });
+});
+
+describe("refresh failure handling", () => {
+  it("server-rejected refresh token drops to anonymous and surfaces the 401", async () => {
+    const fetchFn = stubFetch((url) => {
+      if (String(url).endsWith("/oauth/token")) {
+        return json({ code: "invalid_grant", message: "already used" }, 400);
+      }
+      return json({ code: "invalid_token", message: "expired" }, 401);
+    });
+    const client = new MichelangeloClient({ fetchFn, clientId: "c1" });
+    client.auth.setSession({ access_token: "tok-old", refresh_token: "ref-old", expires_in: 0 });
+    await assert.rejects(client.whoami(), (err: unknown) => err instanceof MichelangeloApiError && err.status === 401);
+    assert.equal(client.auth.isAuthenticated(), false);
+  });
+
+  it("transport failure during refresh keeps the session; a new token retries", async () => {
+    let tokenCalls = 0;
+    const fetchFn = stubFetch((url, init) => {
+      if (String(url).endsWith("/oauth/token")) {
+        tokenCalls += 1;
+        if (tokenCalls === 1) throw new Error("socket hang up");
+        return json({ access_token: "tok-new", refresh_token: "ref-new", token_type: "Bearer", expires_in: 3600 });
+      }
+      if (String(url).endsWith("/v1/whoami")) {
+        const authz = new Headers(init?.headers).get("authorization");
+        if (authz === "Bearer tok-new") return json({ user_id: "u-1", client_id: "c1" });
+        return json({ code: "invalid_token", message: "expired" }, 401);
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const client = new MichelangeloClient({ fetchFn, clientId: "c1" });
+    client.auth.setSession({ access_token: "tok-old", refresh_token: "ref-old", expires_in: 0 });
+    // First call: 401 → refresh hits a transport blip → 401 surfaces…
+    await assert.rejects(client.whoami(), (err: unknown) => err instanceof MichelangeloApiError && err.status === 401);
+    // …but the session survives (no anonymous "Bearer required" storm).
+    assert.equal(client.auth.isAuthenticated(), true);
+    assert.equal(client.auth.getSession()?.refreshToken, "ref-old");
+    // The same token is cooling down (no endpoint hit)…
+    await assert.rejects(client.whoami(), (err: unknown) => err instanceof MichelangeloApiError && err.status === 401);
+    assert.equal(tokenCalls, 1);
+    // …while a rotated pair (e.g. persisted by a sibling tab) bypasses the
+    // cooldown and the call succeeds end to end.
+    client.auth.setSession({ access_token: "tok-old", refresh_token: "ref-new-tab", expires_in: 0 });
+    const me = await client.whoami();
+    assert.equal(tokenCalls, 2);
+    assert.equal(me.user_id, "u-1");
+    assert.equal(client.auth.getAccessToken(), "tok-new");
+  });
+
+  it("serial refreshes with a dead token fail fast (cooldown); a new token bypasses it", async () => {
+    let tokenCalls = 0;
+    const fetchFn = stubFetch((url) => {
+      assert.ok(String(url).endsWith("/oauth/token"));
+      tokenCalls += 1;
+      return json({ code: "invalid_grant", message: "revoked" }, 400);
+    });
+    const auth = new AuthManager({ clientId: "c1", fetchFn });
+    auth.setSession({ access_token: "tok-0", refresh_token: "ref-0", expires_in: 0 });
+    await assert.rejects(auth.refresh(), /token request failed/);
+    await assert.rejects(
+      auth.refresh(),
+      (err: unknown) => err instanceof MichelangeloAuthError && err.causeCode === "cooldown",
+    );
+    assert.equal(tokenCalls, 1);
+    // A different token (e.g. adopted cross-tab) bypasses the cooldown…
+    auth.setSession({ access_token: "tok-0", refresh_token: "ref-1", expires_in: 0 });
+    await assert.rejects(auth.refresh(), /token request failed/);
+    assert.equal(tokenCalls, 2);
+  });
+
+  it("a successful refresh clears the cooldown", async () => {
+    let tokenCalls = 0;
+    const fetchFn = stubFetch(() => {
+      tokenCalls += 1;
+      if (tokenCalls === 1) return json({ code: "invalid_grant", message: "revoked" }, 400);
+      return json({ access_token: "tok-ok", refresh_token: "ref-ok", token_type: "Bearer", expires_in: 3600 });
+    });
+    const auth = new AuthManager({ clientId: "c1", fetchFn });
+    auth.setSession({ access_token: "tok-0", refresh_token: "ref-0", expires_in: 0 });
+    await assert.rejects(auth.refresh());
+    // Same token is cooling down…
+    await assert.rejects(
+      auth.refresh(),
+      (err: unknown) => err instanceof MichelangeloAuthError && err.causeCode === "cooldown",
+    );
+    assert.equal(tokenCalls, 1);
+    // …but a rotation picked up elsewhere succeeds and clears it; the old
+    // token (re-presented here for the test) hits the endpoint again.
+    auth.setSession({ access_token: "tok-0", refresh_token: "ref-1", expires_in: 0 });
+    await auth.refresh();
+    assert.equal(tokenCalls, 2);
+    auth.setSession({ access_token: "tok-0", refresh_token: "ref-0", expires_in: 0 });
+    await auth.refresh();
+    assert.equal(tokenCalls, 3);
+    assert.equal(auth.getAccessToken(), "tok-ok");
+  });
+
+  it("concurrent 401s with a failing refresh share one token call and keep the session on transport errors", async () => {
+    let tokenCalls = 0;
+    const fetchFn = stubFetch((url) => {
+      if (String(url).endsWith("/oauth/token")) {
+        tokenCalls += 1;
+        throw new Error("dns timeout");
+      }
+      return json({ code: "invalid_token", message: "expired" }, 401);
+    });
+    const client = new MichelangeloClient({ fetchFn, clientId: "c1" });
+    client.auth.setSession({ access_token: "tok-old", refresh_token: "ref-old", expires_in: 0 });
+    const results = await Promise.allSettled([client.whoami(), client.whoami(), client.whoami()]);
+    assert.equal(tokenCalls, 1);
+    for (const r of results) {
+      assert.equal(r.status, "rejected");
+      assert.ok((r as PromiseRejectedResult).reason instanceof MichelangeloApiError);
+    }
+    assert.equal(client.auth.isAuthenticated(), true);
   });
 });

@@ -16,6 +16,13 @@ import type {
   TokenResponse,
 } from "./types.js";
 
+/**
+ * Serial callers re-presenting a just-failed refresh token fail fast for
+ * this long instead of hammering the token endpoint (mirrors
+ * `REFRESH_FAILURE_COOLDOWN_MS` in @supabase/auth-js).
+ */
+const REFRESH_FAILURE_COOLDOWN_MS = 10_000;
+
 export interface AuthManagerOptions {
   /** Defaults to https://auth.michelangelo.land/auth/v1 (from swagger `oauth2` scheme). */
   authBaseUrl?: string;
@@ -78,6 +85,15 @@ export class AuthManager {
    * process-local guard on React Native).
    */
   private refreshPromise: Promise<Session> | null = null;
+  /**
+   * Last refresh failure, keyed by the refresh token that failed. Serial
+   * callers presenting the *same* token within `REFRESH_FAILURE_COOLDOWN_MS`
+   * fail fast instead of hammering `/token` with a dead token; callers with
+   * a *different* token (rotation picked up cross-tab, fresh `setSession`)
+   * bypass it. Cleared on any success and on `logout()`. Same idea as
+   * `REFRESH_FAILURE_COOLDOWN_MS` in @supabase/auth-js.
+   */
+  private lastRefreshFailure: { refreshToken: string; at: number } | null = null;
 
   constructor(options: AuthManagerOptions = {}) {
     this.authBaseUrl = (options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL).replace(/\/$/, "");
@@ -127,6 +143,7 @@ export class AuthManager {
   /** Back to anonymous — drops the in-memory token. */
   logout(): void {
     this.session = null;
+    this.lastRefreshFailure = null;
   }
 
   /** `Authorization` header value for the current session, if any. */
@@ -141,7 +158,7 @@ export class AuthManager {
     const body: RegisterClientInput = {
       client_name: input.client_name,
       redirect_uris: input.redirect_uris,
-      grant_types: input.grant_types ?? ["authorization_code"],
+      grant_types: input.grant_types ?? ["authorization_code", "refresh_token"],
       token_endpoint_auth_method: "none",
     };
     let res: Response;
@@ -231,15 +248,32 @@ export class AuthManager {
    * Rotate the access token with the stored refresh token (kept in memory).
    * Concurrent callers share a single in-flight token request (single-flight)
    * — see `refreshPromise`. The in-flight promise is cleared on settle so a
-   * later expiry triggers a fresh rotation.
+   * later expiry triggers a fresh rotation. Serial callers re-presenting a
+   * token that just failed fail fast within the cooldown window instead of
+   * hammering the token endpoint.
    */
   async refresh(): Promise<Session> {
     const inFlight = this.refreshPromise;
     if (inFlight) return inFlight;
+    const currentToken = this.session?.refreshToken;
+    const cooled = this.lastRefreshFailure;
+    if (
+      currentToken &&
+      cooled &&
+      cooled.refreshToken === currentToken &&
+      Date.now() - cooled.at < REFRESH_FAILURE_COOLDOWN_MS
+    ) {
+      throw new MichelangeloAuthError("refresh: cooling down after recent failure", "cooldown");
+    }
     const started = this.doRefresh();
     this.refreshPromise = started;
     try {
-      return await started;
+      const session = await started;
+      this.lastRefreshFailure = null;
+      return session;
+    } catch (err) {
+      if (currentToken) this.lastRefreshFailure = { refreshToken: currentToken, at: Date.now() };
+      throw err;
     } finally {
       if (this.refreshPromise === started) this.refreshPromise = null;
     }

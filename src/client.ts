@@ -1,6 +1,6 @@
 import { AuthManager } from "./auth.js";
 import { DEFAULT_API_BASE_URL } from "./config.js";
-import { MichelangeloApiError } from "./errors.js";
+import { MichelangeloApiError, MichelangeloAuthError } from "./errors.js";
 import { defaultFetch } from "./http.js";
 import type { PkceCrypto } from "./pkce.js";
 import type {
@@ -88,8 +88,11 @@ export interface MichelangeloClientOptions {
   pkceCrypto?: PkceCrypto;
   /**
    * Refresh the access token and retry once when a call fails with 401
-   * (default true). Requires a refresh token in memory; on refresh failure
-   * the session is dropped (back to anonymous) and the 401 surfaces.
+   * (default true). Requires a refresh token in memory; when the refresh
+   * fails the original 401 surfaces. The session is dropped (back to
+   * anonymous) only when the server rejected the refresh token — a
+   * transport failure keeps the session so the next call retries the
+   * refresh instead of sending every later request anonymous.
    */
   autoRefresh?: boolean;
 }
@@ -155,9 +158,19 @@ export class MichelangeloClient {
       ) {
         try {
           await this.auth.refresh();
-        } catch {
-          // Refresh token dead too — drop to anonymous and surface the 401.
-          this.auth.logout();
+        } catch (refreshErr) {
+          // Drop to anonymous only when the refresh token is proven dead
+          // (the server rejected it). A transport failure — or a cooldown
+          // fail-fast after one — must never log the user out: the session
+          // stays and the next call retries the refresh.
+          if (
+            refreshErr instanceof MichelangeloAuthError &&
+            refreshErr.causeCode !== "network_error" &&
+            refreshErr.causeCode !== "missing_refresh_token" &&
+            refreshErr.causeCode !== "cooldown"
+          ) {
+            this.auth.logout();
+          }
           throw err;
         }
         return this.doRequest<T>(path, options);

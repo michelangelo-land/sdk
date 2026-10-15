@@ -186,9 +186,13 @@ attachments). On Node/web a `Blob`/`File` (or `FormData`) works directly.
 
 Calls that fail with 401 refresh the access token from the in-memory
 refresh token and retry once (disable with `new MichelangeloClient({
-autoRefresh: false })`). If the refresh fails too, the SDK drops to
-anonymous and the 401 surfaces — call `loginWithLoopback()` (or the browser
-flow) again.
+autoRefresh: false })`). If the refresh fails too, the original 401
+surfaces — the session is dropped to anonymous only when the server
+rejected the refresh token, never on a transport failure (the next call
+then retries the refresh). Serial callers re-presenting a just-failed
+token fail fast for 10s instead of hammering the token endpoint. If the
+session is really dead, log in again via `loginWithLoopback()` (or the
+browser flow).
 
 ## Expo / React Native (Hermes)
 
