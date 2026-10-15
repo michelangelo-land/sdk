@@ -466,17 +466,19 @@ describe("github + supabase unlink", () => {
 });
 
 describe("prompt suggestions", () => {
-  it("listPromptSuggestions encodes limit/locale/category/shuffle", async () => {
+  it("listPromptSuggestions encodes limit/mode/locale/category/shuffle", async () => {
     let seenUrl = "";
     const fetchFn = stubFetch((url) => {
       seenUrl = String(url);
-      return json({ data: [{ id: "expense-tracker-it", prompt: "build an expense tracker", locale: "it", category: "finance" }] });
+      return json({ data: [{ id: "expense-tracker-it", prompt: "build an expense tracker", mode: "create", locale: "it", category: "finance" }] });
     });
-    const page = await authed(fetchFn).listPromptSuggestions({ locale: "it", category: "finance", limit: 20 });
+    const page = await authed(fetchFn).listPromptSuggestions({ mode: "create", locale: "it", category: "finance", limit: 20 });
     assert.equal(page.data[0]?.id, "expense-tracker-it");
+    assert.equal(page.data[0]?.mode, "create");
     const u = new URL(seenUrl);
     assert.ok(u.pathname.endsWith("/v1/prompt-suggestions"), seenUrl);
     assert.equal(u.searchParams.get("limit"), "20");
+    assert.equal(u.searchParams.get("mode"), "create");
     assert.equal(u.searchParams.get("locale"), "it");
     assert.equal(u.searchParams.get("category"), "finance");
     assert.equal(u.searchParams.get("shuffle"), null);
@@ -486,12 +488,25 @@ describe("prompt suggestions", () => {
     let seenUrl = "";
     const fetchFn = stubFetch((url) => {
       seenUrl = String(url);
-      return json({ data: [{ id: "timer-en", prompt: "build a timer app", locale: "en", category: "productivity" }] });
+      return json({ data: [{ id: "timer-en", prompt: "build a timer app", mode: "create", locale: "en", category: "productivity" }] });
     });
     const page = await authed(fetchFn).listPromptSuggestions({ shuffle: true, limit: 1 });
     assert.equal(page.data.length, 1);
     const u = new URL(seenUrl);
     assert.equal(u.searchParams.get("shuffle"), "true");
     assert.equal(u.searchParams.get("limit"), "1");
+    assert.equal(u.searchParams.get("mode"), null);
+  });
+
+  it("listPromptSuggestions filters edit ideas", async () => {
+    let seenUrl = "";
+    const fetchFn = stubFetch((url) => {
+      seenUrl = String(url);
+      return json({ data: [{ id: "add-auth-en", prompt: "add login to this app", mode: "edit", locale: "en", category: "auth" }] });
+    });
+    const page = await authed(fetchFn).listPromptSuggestions({ mode: "edit", limit: 20 });
+    assert.equal(page.data[0]?.mode, "edit");
+    const u = new URL(seenUrl);
+    assert.equal(u.searchParams.get("mode"), "edit");
   });
 });

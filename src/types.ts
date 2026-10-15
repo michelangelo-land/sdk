@@ -140,11 +140,15 @@ export interface WaitForJobOptions {
 
 export type PromptSuggestionLocale = "it" | "en";
 
+export type PromptSuggestionMode = "create" | "edit";
+
 export interface PromptSuggestion {
   /** Stable slug (e.g. expense-tracker-it). */
   id: string;
   /** Ready-to-send prompt (valid `type: "prompt"` input for `POST /jobs`). */
   prompt: string;
+  /** Use case: `create` starts a new app (no `project_id`), `edit` modifies the current app. */
+  mode: PromptSuggestionMode;
   locale: PromptSuggestionLocale;
   /** Single lowercase word (e.g. finance, health, travel). */
   category: string;
@@ -157,6 +161,8 @@ export interface PromptSuggestionsPage {
 export interface ListPromptSuggestionsOptions {
   /** Page size (default 20, max 100). Small static list: plain limit, no cursor. */
   limit?: number;
+  /** Filter by use case: `create` = new app ideas, `edit` = modify-current-app ideas. Omit for both. */
+  mode?: PromptSuggestionMode;
   /** Filter by language (omit for both `it` + `en`). */
   locale?: PromptSuggestionLocale;
   /** Filter by category (e.g. finance, health, travel). */

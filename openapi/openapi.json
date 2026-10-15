@@ -610,8 +610,8 @@
           "jobs"
         ],
         "operationId": "listPromptSuggestions",
-        "summary": "Curated prompt ideas for first-run UX",
-        "description": "Static curated list of valid `type=prompt` ideas (each entry is about building a mobile app, so `POST /v1/jobs` accepts it). Fetch once (`?limit=20`) and rotate locally for the input placeholder; pass `?shuffle=true&limit=1` for the dice button. Small static list: plain `limit` pagination (default 20, max 100), no cursor. Authenticated — pre-login clients use a bundled fallback and refresh after login.\n",
+        "summary": "Curated prompt ideas for create and edit UX",
+        "description": "Static curated list of valid `type=prompt` ideas (each entry is about building or modifying a mobile app, so `POST /v1/jobs` accepts it). `mode=create` ideas start a new app (first generation, no `project_id` — empty-state placeholder and dice button); `mode=edit` ideas modify the current app (`project_id` set — edit-screen placeholder and dice button). Fetch once per mode (`?mode=create&limit=20`) and rotate locally; pass `?shuffle=true&limit=1` for the dice button. Small static list: plain `limit` pagination (default 20, max 100), no cursor. Authenticated — pre-login clients use a bundled fallback and refresh after login.\n",
         "security": [
           {
             "oauth2": []
@@ -629,6 +629,18 @@
               "minimum": 1,
               "maximum": 100,
               "default": 20
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "Filter by use case (omit for both)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "create",
+                "edit"
+              ]
             }
           },
           {
@@ -3871,6 +3883,7 @@
         "required": [
           "id",
           "prompt",
+          "mode",
           "locale",
           "category"
         ],
@@ -3882,6 +3895,14 @@
           "prompt": {
             "type": "string",
             "description": "Ready-to-send prompt (valid type=prompt input)"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "create",
+              "edit"
+            ],
+            "description": "create starts a new app (no project_id), edit modifies the current app"
           },
           "locale": {
             "type": "string",

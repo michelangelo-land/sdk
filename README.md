@@ -60,7 +60,7 @@ npm run example:node-login
 | jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay) | Bearer required |
 | jobs | `uploadJobAttachments` `POST /jobs/attachments` (multipart, ≤3 images) | `client.uploadJobAttachments({ files, idempotencyKey })` or `FormData` | Bearer required |
 | jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
-| jobs | `listPromptSuggestions` `GET /prompt-suggestions` | `client.listPromptSuggestions({ locale: "it", limit: 20 })` / `{ shuffle: true, limit: 1 }` for dice | Bearer required |
+| jobs | `listPromptSuggestions` `GET /prompt-suggestions` | `client.listPromptSuggestions({ mode: "create", locale: "it", limit: 20 })` / `{ mode: "edit", shuffle: true, limit: 1 }` for dice | Bearer required |
 | projects | `listProjects` `GET /projects` | `client.listProjects({ visibility: "all", q })` / `client.listAllProjects()` | Bearer required |
 | projects | `createProject` `POST /projects` | `client.createProject({ name })` → 201 | Bearer required |
 | projects | `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |
@@ -98,6 +98,12 @@ npm run example:node-login
 | notifications | `removePushToken` `DELETE /push-tokens/{token}` | `client.removePushToken(token)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
+> Migration notes (0.10.0): `GET /prompt-suggestions` gained `?mode=create|edit`
+> and every `PromptSuggestion` now carries a required `mode`
+> (`create` = new-app ideas, `edit` = modify-current-app ideas).
+> Pass `mode` to `listPromptSuggestions()` to fetch one use case
+> (omit for both).
+>
 > Migration notes (0.8.0): `GET /wallets/me` is now single-balance —
 > `bonus_balance`, `bonus_expires_at`, `total` and `display_total` are gone.
 > Bonus grants (`reason: "bonus"`) credit the same `balance` like a top-up.

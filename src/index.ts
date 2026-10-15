@@ -84,6 +84,7 @@ export type {
   ProjectVisibility,
   PromptSuggestion,
   PromptSuggestionLocale,
+  PromptSuggestionMode,
   PromptSuggestionsPage,
   PublicProfile,
   PushToken,

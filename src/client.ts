@@ -369,19 +369,23 @@ export class MichelangeloClient {
   }
 
   /**
-   * `GET /prompt-suggestions` — curated prompt ideas for first-run UX.
-   * Static list of valid `type: "prompt"` ideas (each entry builds a mobile
-   * app, so `POST /jobs` accepts it). Fetch once (`limit: 20`) and rotate
-   * locally for the input placeholder; pass `shuffle: true, limit: 1` for
-   * the dice button. Plain `limit` pagination (default 20, max 100), no
-   * cursor. Authenticated — pre-login clients use a bundled fallback and
-   * refresh after login.
+   * `GET /prompt-suggestions` — curated prompt ideas for create and edit UX.
+   * Static list of valid `type: "prompt"` ideas (each entry builds or modifies
+   * a mobile app, so `POST /jobs` accepts it). `mode: "create"` ideas start a
+   * new app (first generation, no `project_id` — empty-state placeholder and
+   * dice button); `mode: "edit"` ideas modify the current app (`project_id`
+   * set — edit-screen placeholder and dice button). Fetch once per mode
+   * (`limit: 20`) and rotate locally for the input placeholder; pass
+   * `shuffle: true, limit: 1` for the dice button. Plain `limit` pagination
+   * (default 20, max 100), no cursor. Authenticated — pre-login clients use a
+   * bundled fallback and refresh after login.
    */
   listPromptSuggestions(
     options: ListPromptSuggestionsOptions = {},
   ): Promise<PromptSuggestionsPage> {
     const params = new URLSearchParams();
     params.set("limit", String(options.limit ?? 20));
+    if (options.mode !== undefined) params.set("mode", options.mode);
     if (options.locale !== undefined) params.set("locale", options.locale);
     if (options.category !== undefined) params.set("category", options.category);
     if (options.shuffle !== undefined) params.set("shuffle", String(options.shuffle));
