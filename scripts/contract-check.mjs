@@ -14,7 +14,7 @@ const EXPECTED = {
   operations: [
     "getHealth", "getOpenApiDocument", "getDocs", "getWhoami", "getMe",
     "updateMe", "deleteMe", "uploadMyAvatar", "getPublicProfile", "createJob", "uploadJobAttachments",
-    "getJob", "listProjects", "createProject", "createBillingCheckout",
+    "getJob", "listPromptSuggestions", "listProjects", "createProject", "createBillingCheckout",
     "handleBillingWebhook", "getProject", "updateProject", "deleteProject",
     "listProjectFiles", "saveProjectFiles", "generateProjectIcon", "pushProjectToGithub", "reshareProject",
     "listPreviewErrors", "drainPreviewErrors", "getProjectSupabaseLink",
@@ -29,7 +29,7 @@ const EXPECTED = {
   ],
   paths: [
     "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar", "/users/{userId}",
-    "/jobs", "/jobs/attachments", "/jobs/{jobId}", "/projects",
+    "/jobs", "/jobs/attachments", "/jobs/{jobId}", "/prompt-suggestions", "/projects",
     "/billing/checkouts", "/billing/webhooks", "/projects/{projectId}",
     "/projects/{projectId}/files", "/projects/{projectId}/icon",
     "/projects/{projectId}/pushes", "/projects/{projectId}/reshares", "/projects/{projectId}/preview-errors",
@@ -48,7 +48,7 @@ const EXPECTED = {
   implementedBySdk: [
     "getHealth", "getWhoami", "getMe", "updateMe", "deleteMe", "uploadMyAvatar",
     "getPublicProfile",
-    "createJob", "uploadJobAttachments", "getJob", "listProjects", "createProject",
+    "createJob", "uploadJobAttachments", "getJob", "listPromptSuggestions", "listProjects", "createProject",
     "getProject", "updateProject", "deleteProject", "listProjectFiles", "saveProjectFiles",
     "generateProjectIcon", "pushProjectToGithub", "reshareProject", "listPreviewErrors",
     "drainPreviewErrors", "getProjectSupabaseLink",

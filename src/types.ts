@@ -136,6 +136,35 @@ export interface WaitForJobOptions {
   onProgress?: (job: Job) => void;
 }
 
+// --- prompt suggestions → `listPromptSuggestions`, schema `PromptSuggestion` ---
+
+export type PromptSuggestionLocale = "it" | "en";
+
+export interface PromptSuggestion {
+  /** Stable slug (e.g. expense-tracker-it). */
+  id: string;
+  /** Ready-to-send prompt (valid `type: "prompt"` input for `POST /jobs`). */
+  prompt: string;
+  locale: PromptSuggestionLocale;
+  /** Single lowercase word (e.g. finance, health, travel). */
+  category: string;
+}
+
+export interface PromptSuggestionsPage {
+  data: PromptSuggestion[];
+}
+
+export interface ListPromptSuggestionsOptions {
+  /** Page size (default 20, max 100). Small static list: plain limit, no cursor. */
+  limit?: number;
+  /** Filter by language (omit for both `it` + `en`). */
+  locale?: PromptSuggestionLocale;
+  /** Filter by category (e.g. finance, health, travel). */
+  category?: string;
+  /** Randomize server-side (dice button). Default false. */
+  shuffle?: boolean;
+}
+
 // --- projects → `listProjects`/`createProject`/`getProject`/`updateProject`/`deleteProject`, schemas `Project`/`ProjectPage` ---
 
 export type ProjectVisibility = "mine" | "all";

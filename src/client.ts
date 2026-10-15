@@ -48,6 +48,8 @@ import type {
   NotificationsPage,
   PreviewErrorsPage,
   ListPreviewErrorsOptions,
+  ListPromptSuggestionsOptions,
+  PromptSuggestionsPage,
   Project,
   ProjectFilesPage,
   ProjectPage,
@@ -364,6 +366,26 @@ export class MichelangeloClient {
       await sleep(delay, options.signal);
       delay = Math.min(delay * 2, maxDelayMs);
     }
+  }
+
+  /**
+   * `GET /prompt-suggestions` — curated prompt ideas for first-run UX.
+   * Static list of valid `type: "prompt"` ideas (each entry builds a mobile
+   * app, so `POST /jobs` accepts it). Fetch once (`limit: 20`) and rotate
+   * locally for the input placeholder; pass `shuffle: true, limit: 1` for
+   * the dice button. Plain `limit` pagination (default 20, max 100), no
+   * cursor. Authenticated — pre-login clients use a bundled fallback and
+   * refresh after login.
+   */
+  listPromptSuggestions(
+    options: ListPromptSuggestionsOptions = {},
+  ): Promise<PromptSuggestionsPage> {
+    const params = new URLSearchParams();
+    params.set("limit", String(options.limit ?? 20));
+    if (options.locale !== undefined) params.set("locale", options.locale);
+    if (options.category !== undefined) params.set("category", options.category);
+    if (options.shuffle !== undefined) params.set("shuffle", String(options.shuffle));
+    return this.request<PromptSuggestionsPage>(`/prompt-suggestions?${params.toString()}`);
   }
 
   /**

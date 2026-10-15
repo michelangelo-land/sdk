@@ -60,6 +60,7 @@ npm run example:node-login
 | jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay) | Bearer required |
 | jobs | `uploadJobAttachments` `POST /jobs/attachments` (multipart, ≤3 images) | `client.uploadJobAttachments({ files, idempotencyKey })` or `FormData` | Bearer required |
 | jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
+| jobs | `listPromptSuggestions` `GET /prompt-suggestions` | `client.listPromptSuggestions({ locale: "it", limit: 20 })` / `{ shuffle: true, limit: 1 }` for dice | Bearer required |
 | projects | `listProjects` `GET /projects` | `client.listProjects({ visibility: "all", q })` / `client.listAllProjects()` | Bearer required |
 | projects | `createProject` `POST /projects` | `client.createProject({ name })` → 201 | Bearer required |
 | projects | `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |

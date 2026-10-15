@@ -464,3 +464,34 @@ describe("github + supabase unlink", () => {
     assert.ok(seen.endsWith("/v1/integrations/supabase/links/7"), seen);
   });
 });
+
+describe("prompt suggestions", () => {
+  it("listPromptSuggestions encodes limit/locale/category/shuffle", async () => {
+    let seenUrl = "";
+    const fetchFn = stubFetch((url) => {
+      seenUrl = String(url);
+      return json({ data: [{ id: "expense-tracker-it", prompt: "build an expense tracker", locale: "it", category: "finance" }] });
+    });
+    const page = await authed(fetchFn).listPromptSuggestions({ locale: "it", category: "finance", limit: 20 });
+    assert.equal(page.data[0]?.id, "expense-tracker-it");
+    const u = new URL(seenUrl);
+    assert.ok(u.pathname.endsWith("/v1/prompt-suggestions"), seenUrl);
+    assert.equal(u.searchParams.get("limit"), "20");
+    assert.equal(u.searchParams.get("locale"), "it");
+    assert.equal(u.searchParams.get("category"), "finance");
+    assert.equal(u.searchParams.get("shuffle"), null);
+  });
+
+  it("listPromptSuggestions supports dice mode (shuffle + limit=1)", async () => {
+    let seenUrl = "";
+    const fetchFn = stubFetch((url) => {
+      seenUrl = String(url);
+      return json({ data: [{ id: "timer-en", prompt: "build a timer app", locale: "en", category: "productivity" }] });
+    });
+    const page = await authed(fetchFn).listPromptSuggestions({ shuffle: true, limit: 1 });
+    assert.equal(page.data.length, 1);
+    const u = new URL(seenUrl);
+    assert.equal(u.searchParams.get("shuffle"), "true");
+    assert.equal(u.searchParams.get("limit"), "1");
+  });
+});

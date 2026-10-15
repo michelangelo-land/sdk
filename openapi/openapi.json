@@ -604,6 +604,94 @@
         }
       }
     },
+    "/prompt-suggestions": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "listPromptSuggestions",
+        "summary": "Curated prompt ideas for first-run UX",
+        "description": "Static curated list of valid `type=prompt` ideas (each entry is about building a mobile app, so `POST /v1/jobs` accepts it). Fetch once (`?limit=20`) and rotate locally for the input placeholder; pass `?shuffle=true&limit=1` for the dice button. Small static list: plain `limit` pagination (default 20, max 100), no cursor. Authenticated — pre-login clients use a bundled fallback and refresh after login.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "description": "Filter by language (omit for both)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "it",
+                "en"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "description": "Filter by category (e.g. finance, health, travel)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shuffle",
+            "in": "query",
+            "description": "Randomize server-side (dice button). Default false.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of prompt suggestions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PromptSuggestion"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
     "/projects": {
       "get": {
         "tags": [
@@ -3775,6 +3863,37 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "PromptSuggestion": {
+        "type": "object",
+        "required": [
+          "id",
+          "prompt",
+          "locale",
+          "category"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable slug (e.g. expense-tracker-it)"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Ready-to-send prompt (valid type=prompt input)"
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "it",
+              "en"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "description": "Single lowercase word (e.g. finance, health, travel)",
+            "example": "finance"
           }
         }
       },
