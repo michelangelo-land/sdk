@@ -780,7 +780,6 @@ export interface RemoveLiveActivityTokenRequest {
 export interface RegisterLiveActivityUpdateTokenRequest {
   job_id: string;
   update_token: string;
-  activity_id?: string;
 }
 
 /** `live_activity_update_tokens` row (201). */
@@ -788,7 +787,6 @@ export interface LiveActivityUpdateToken {
   job_id: string;
   user_id?: string;
   update_token: string;
-  activity_id?: string | null;
   updated_at?: string;
   [key: string]: unknown;
 }

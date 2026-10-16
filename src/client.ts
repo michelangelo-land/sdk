@@ -326,6 +326,9 @@ export class MichelangeloClient {
    * 402 `insufficient_credits` when the overdraft floor is reached — top up
    * via `createBillingCheckout`. Small overdraft is allowed: a user with
    * 1 cent still runs and goes negative, the next top-up absorbs the red.
+   * Only one active job (`queued` or `running`) per user — a second `POST`
+   * while one is active throws 409 `job_already_active` (poll `getJob` on
+   * the active job instead; see `err.isJobAlreadyActive()`).
    */
   createJob(input: CreateJobRequest): Promise<Job> {
     return this.request<Job>("/jobs", { method: "POST", body: input });
@@ -943,6 +946,7 @@ function httpCodeToErrorCode(status: number): string {
   if (status === 401) return "invalid_token";
   if (status === 402) return "insufficient_credits";
   if (status === 404) return "not_found";
+  if (status === 409) return "conflict";
   if (status === 429) return "rate_limited";
   return "http_error";
 }

@@ -57,7 +57,7 @@ npm run example:node-login
 | users | `deleteMe` `DELETE /me` | `client.deleteMe()` → void (204) | Bearer required |
 | users | `uploadMyAvatar` `POST /me/avatar` (multipart `file`) | `client.uploadMyAvatar(fileOrFormData)` → `{ avatar_url }` | Bearer required |
 | users | `getPublicProfile` `GET /users/{userId}` | `client.getPublicProfile(userId)` → `{ id, username, avatar_url, is_supporter, … }` | Bearer required |
-| jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay) | Bearer required |
+| jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay; 409 `job_already_active` when one is already queued/running) | Bearer required |
 | jobs | `uploadJobAttachments` `POST /jobs/attachments` (multipart, ≤3 images) | `client.uploadJobAttachments({ files, idempotencyKey })` or `FormData` | Bearer required |
 | jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
 | jobs | `listPromptSuggestions` `GET /prompt-suggestions` | `client.listPromptSuggestions({ mode: "create", locale: "it", limit: 20 })` / `{ mode: "edit", shuffle: true, limit: 1 }` for dice | Bearer required |
@@ -99,10 +99,17 @@ npm run example:node-login
 | live-activity | `listLiveActivityTokens` `GET /live-activity/tokens` | `client.listLiveActivityTokens()` | Bearer required |
 | live-activity | `registerLiveActivityToken` `POST /live-activity/tokens` | `client.registerLiveActivityToken({ push_to_start_token })` → 201 | Bearer required |
 | live-activity | `removeLiveActivityToken` `DELETE /live-activity/tokens/{token}` | `client.removeLiveActivityToken(token)` → void (204) | Bearer required |
-| live-activity | `registerLiveActivityUpdateToken` `POST /live-activity/update-tokens` | `client.registerLiveActivityUpdateToken({ job_id, update_token, activity_id })` → 201 | Bearer required |
+| live-activity | `registerLiveActivityUpdateToken` `POST /live-activity/update-tokens` | `client.registerLiveActivityUpdateToken({ job_id, update_token })` → 201 | Bearer required |
 | live-activity | `removeLiveActivityUpdateToken` `DELETE /live-activity/update-tokens/{jobId}` | `client.removeLiveActivityUpdateToken(job_id)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
+> Migration notes (0.13.0): `POST /jobs` enforces a single active job per
+> user — a second call while one is `queued`/`running` returns 409
+> `job_already_active` (catch with `err.isJobAlreadyActive()` and poll the
+> active job). `POST /live-activity/update-tokens` and the
+> `LiveActivityUpdateToken` row lost `activity_id` — drop it from
+> `registerLiveActivityUpdateToken()` calls.
+>
 > Migration notes (0.12.0): new `POST /live-activity/update-tokens` +
 > `DELETE /live-activity/update-tokens/{jobId}`
 > (`registerLiveActivityUpdateToken()` / `removeLiveActivityUpdateToken()`).
@@ -154,7 +161,8 @@ Not covered on purpose: `getOpenApiDocument`/`getDocs` (meta) and
 
 ```ts
 // Async generation: create, then wait (backoff 2s → 30s, 10 min timeout).
-// createJob throws 402 insufficient_credits when the overdraft floor is reached.
+// createJob throws 402 insufficient_credits when the overdraft floor is reached,
+// 409 job_already_active when another job is still queued/running.
 const job = await client.createJob({ type: "prompt", input: { prompt: "a timer app" } });
 const done = await client.waitForJob(job.id, {
   onProgress: (j) => console.log(j.status),
@@ -184,7 +192,7 @@ await client.registerLiveActivityToken({ push_to_start_token });
 // After a remote start, bind the per-activity token to its job (job_id comes
 // from the start props, token from getPushToken()/addPushTokenListener) so the
 // server can send update/end pushes for that job:
-await client.registerLiveActivityUpdateToken({ job_id: job.id, update_token, activity_id });
+await client.registerLiveActivityUpdateToken({ job_id: job.id, update_token });
 
 // Author of a project (community cards show the `author` embed; `user_id` for the full hero):
 const author = project.author; // { username, avatar_url } | null

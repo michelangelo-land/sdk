@@ -32,6 +32,18 @@ export class MichelangeloApiError extends Error {
   isInsufficientCredits(): boolean {
     return this.status === 402;
   }
+
+  isConflict(): boolean {
+    return this.status === 409;
+  }
+
+  /**
+   * `POST /jobs` while another job is `queued`/`running` (single-active
+   * limit): 409 `job_already_active` — poll `getJob` on the active job.
+   */
+  isJobAlreadyActive(): boolean {
+    return this.status === 409 && this.code === "job_already_active";
+  }
 }
 
 /** Error thrown for OAuth / session failures (no `code` from the API shape). */

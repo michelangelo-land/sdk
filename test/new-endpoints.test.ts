@@ -550,9 +550,8 @@ describe("live activity tokens", () => {
         assert.deepEqual(JSON.parse(String(init?.body)), {
           job_id: jobId,
           update_token: "upd-x",
-          activity_id: "act-1",
         });
-        return json({ job_id: jobId, update_token: "upd-x", activity_id: "act-1" }, 201);
+        return json({ job_id: jobId, update_token: "upd-x" }, 201);
       }
       if (u.includes("/live-activity/update-tokens/") && method === "DELETE") {
         deleteUrl = u;
@@ -565,7 +564,6 @@ describe("live activity tokens", () => {
     const reg = await client.registerLiveActivityUpdateToken({
       job_id: jobId,
       update_token: "upd-x",
-      activity_id: "act-1",
     });
     assert.equal(reg.job_id, jobId);
     assert.equal(reg.update_token, "upd-x");

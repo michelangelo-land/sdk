@@ -153,6 +153,21 @@ describe("billing", () => {
       return true;
     });
   });
+
+  it("createJob surfaces 409 job_already_active (single-active limit)", async () => {
+    const fetchFn = stubFetch(() =>
+      json({ code: "job_already_active", message: "another job is active" }, 409),
+    );
+    const client = new MichelangeloClient({ fetchFn });
+    client.auth.setSession({ access_token: "t" });
+    await assert.rejects(client.createJob({ type: "prompt", input: { prompt: "x" } }), (err: unknown) => {
+      assert.ok(err instanceof MichelangeloApiError && err.status === 409);
+      assert.ok((err as MichelangeloApiError).isConflict());
+      assert.ok((err as MichelangeloApiError).isJobAlreadyActive());
+      assert.equal((err as MichelangeloApiError).code, "job_already_active");
+      return true;
+    });
+  });
 });
 
 describe("users", () => {
