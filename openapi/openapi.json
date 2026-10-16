@@ -49,7 +49,7 @@
     },
     {
       "name": "live-activity",
-      "description": "Live Activity push-to-start tokens for background starts"
+      "description": "Live Activity tokens — push-to-start (background starts) plus per-activity update tokens (remote update/end per job)"
     },
     {
       "name": "moderation",
@@ -2925,6 +2925,93 @@
           }
         }
       }
+    },
+    "/live-activity/update-tokens": {
+      "post": {
+        "tags": [
+          "live-activity"
+        ],
+        "operationId": "registerLiveActivityUpdateToken",
+        "summary": "Register per-activity update token for a job",
+        "description": "Stores the APNs per-activity update token for one job (`live_activity_update_tokens`, one row per `job_id`). The device reports it after a remote `start` (via `getInstances()` + `getPushToken()`/`addPushTokenListener`) together with the `job_id` it received inside the start props. The server-side `jobs_live_activity_push` trigger reads this row (never `jobs.input`) to send `update`/`end` pushes. The job must belong to the caller, otherwise 404. Upsert on `job_id`. RLS `Users can manage own live activity update tokens`.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterLiveActivityUpdateTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Update token registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveActivityUpdateToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Job not found (or not owned by the caller) — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/live-activity/update-tokens/{jobId}": {
+      "delete": {
+        "tags": [
+          "live-activity"
+        ],
+        "operationId": "removeLiveActivityUpdateToken",
+        "summary": "Remove per-activity update token of a job",
+        "description": "Deletes the caller's update-token row for the path `jobId` (cleanup after `end`/dismiss). Idempotent: 204 even when no row exists.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Update token removed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3431,6 +3518,62 @@
             "default": "GenerationActivity"
           }
         }
+      },
+      "RegisterLiveActivityUpdateTokenRequest": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "update_token"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Job the started Live Activity belongs to (from the start props)"
+          },
+          "update_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "APNs per-activity token from getPushToken()/addPushTokenListener"
+          },
+          "activity_id": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Device-side activity id from the push-token event (optional, for debugging)"
+          }
+        }
+      },
+      "LiveActivityUpdateToken": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "update_token"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "update_token": {
+            "type": "string"
+          },
+          "activity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true
       },
       "LiveActivityToken": {
         "type": "object",
