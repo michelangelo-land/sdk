@@ -121,6 +121,16 @@ export interface AttachmentsManifest {
   attachments: JobAttachmentRef[];
 }
 
+/** Centralized prompt-attachment limits (mirrored server-side in the API). */
+export const JOB_ATTACHMENT_MAX_COUNT = 3;
+export const JOB_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+export const JOB_ATTACHMENT_ALLOWED_MIMES = ["image/png", "image/jpeg", "image/webp"] as const;
+export type JobAttachmentMime = (typeof JOB_ATTACHMENT_ALLOWED_MIMES)[number];
+
+export function isAllowedAttachmentMime(mime: string): mime is JobAttachmentMime {
+  return (JOB_ATTACHMENT_ALLOWED_MIMES as readonly string[]).includes(mime);
+}
+
 export interface Job {
   id: string;
   type: string;
@@ -131,6 +141,13 @@ export interface Job {
   error?: ApiErrorBody;
   created_at: string;
   updated_at?: string;
+  /**
+   * Indicative p50 of recent succeeded prompt jobs (fallback 120s).
+   * Never an SLA — keep progress UI indeterminate.
+   */
+  estimated_duration_seconds?: number | null;
+  /** 0 for the active (queued/running) job, null once terminal. */
+  queue_position?: number | null;
 }
 
 export interface WaitForJobOptions {
@@ -144,6 +161,14 @@ export interface WaitForJobOptions {
   signal?: AbortSignal;
   /** Called with every snapshot, including the first. */
   onProgress?: (job: Job) => void;
+  /**
+   * Retry transient `getJob` failures (network/502/429) with backoff
+   * instead of throwing immediately (default true). AbortSignal and
+   * timeouts always throw.
+   */
+  retryNetworkErrors?: boolean;
+  /** Consecutive transient retries before surfacing (default 10). */
+  maxNetworkRetries?: number;
 }
 
 // --- prompt suggestions → `listPromptSuggestions`, schema `PromptSuggestion` ---
@@ -215,6 +240,11 @@ export interface ListProjectsOptions {
   cursor?: string;
   /** `mine` (default): caller's own projects. `all`: plus public/shared. */
   visibility?: ProjectVisibility;
+  /**
+   * Filter by owner id (uuid) — one user's shared projects without
+   * downloading the feed. RLS still applies (only shared rows of others).
+   */
+  owner?: string;
   /** Full-text query via RPC match_project (RLS still applies). */
   q?: string;
 }
@@ -382,6 +412,13 @@ export interface GithubInstallation {
   name?: string | null;
 }
 
+/** `GET /github/user` — GitHub profile proxied server-side via stored ghu. */
+export interface GithubUser {
+  login: string;
+  avatar_url?: string | null;
+  name?: string | null;
+}
+
 export interface GithubInstallationsPage {
   data: GithubInstallation[];
 }
@@ -392,9 +429,26 @@ export interface SaveGithubInstallationRequest {
   id: number;
   /** User OAuth token (write-only, stored server-side, never returned). */
   ghu: string;
+  /** GitHub login (optional — fetched server-side via ghu when omitted). */
   login?: string;
   avatar?: string | null;
   name?: string | null;
+}
+
+/** `POST /github/discover` — installations visible to a fresh token. */
+export interface DiscoverGithubInstallationsRequest {
+  /** Fresh GitHub user OAuth token (used once, never stored). */
+  ghu: string;
+}
+
+export interface DiscoveredGithubInstallation {
+  id: number;
+  app_slug?: string | null;
+  [key: string]: unknown;
+}
+
+export interface DiscoverGithubInstallationsResponse {
+  installations: DiscoveredGithubInstallation[];
 }
 
 export interface GithubRepository {
@@ -460,9 +514,24 @@ export type StartSupabaseOAuthRequest = CreateSupabaseAuthorizationRequest;
 export type StartSupabaseOAuthResponse = CreateSupabaseAuthorizationResponse;
 
 /** `GET /integrations/supabase/projects` — edge-proxied projects + organizations. */
+export interface SupabaseProject {
+  ref: string;
+  name?: string | null;
+  region?: string | null;
+  created_at?: string | null;
+  linked_project_id?: number | null;
+  [key: string]: unknown;
+}
+
+export interface SupabaseOrganization {
+  id?: string;
+  name?: string | null;
+  [key: string]: unknown;
+}
+
 export interface SupabaseProjectsResult {
-  projects: Record<string, unknown>[];
-  organizations?: Record<string, unknown>[];
+  projects: SupabaseProject[];
+  organizations?: SupabaseOrganization[];
   [key: string]: unknown;
 }
 
@@ -520,11 +589,11 @@ export interface BillingCheckout {
   currency: "eur";
 }
 
-// --- wallets → `getMyWallet`/`listMyTransactions` ---
+// --- wallets → `getMyWallet`/`listMyTransactions`/`getWalletSummary` ---
 // Unit is EUR-cent credits: 1 credit = 1 EUR-cent, 1 EUR = 100 credits.
 // Single balance — bonus grants (`reason: "bonus"`, e.g. gifts) credit the
 // same `balance` like a top-up, there is no separate bonus column.
-// Money math never uses floats — render `display_balance` verbatim
+// Money math never uses floats — render `display_*` verbatim
 // (preformatted server-side, it-IT EUR).
 
 export interface Wallet {
@@ -535,6 +604,26 @@ export interface Wallet {
   balance_eur: string;
   /** Preformatted balance for direct rendering (it-IT), e.g. "10,10 €". */
   display_balance: string;
+}
+
+/**
+ * Aggregated wallet view (one call replaces ledger pagination for the
+ * budget bar). `total_granted` = sum of positive deltas,
+ * `total_used` = `total_granted - balance` (can exceed granted in overdraft).
+ */
+export interface WalletSummary extends Wallet {
+  /** Lifetime granted credits (sum of positive ledger deltas). */
+  total_granted: number;
+  /** Lifetime consumed credits (`total_granted - balance`). */
+  total_used: number;
+  /** Granted as decimal EUR string, e.g. "50.00". */
+  total_granted_eur: string;
+  /** Used as decimal EUR string, e.g. "39.90". */
+  total_used_eur: string;
+  /** Preformatted granted for direct rendering (it-IT). */
+  display_granted: string;
+  /** Preformatted used for direct rendering (it-IT). */
+  display_used: string;
 }
 
 export type WalletTransactionReason =
@@ -684,7 +773,11 @@ export interface Notification {
   metadata?: Record<string, unknown>;
   is_read?: boolean;
   created_at?: string;
+  /** Sender profile id (null for system notifications). */
+  sender_id?: string | null;
   sender?: NotificationSender | null;
+  /** Icon of entity_id when entity_type=project, else null (no cache lookup). */
+  project_icon_url?: string | null;
 }
 
 export interface NotificationsPage {

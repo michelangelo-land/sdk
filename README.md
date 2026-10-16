@@ -57,11 +57,12 @@ npm run example:node-login
 | users | `deleteMe` `DELETE /me` | `client.deleteMe()` → void (204) | Bearer required |
 | users | `uploadMyAvatar` `POST /me/avatar` (multipart `file`) | `client.uploadMyAvatar(fileOrFormData)` → `{ avatar_url }` | Bearer required |
 | users | `getPublicProfile` `GET /users/{userId}` | `client.getPublicProfile(userId)` → `{ id, username, avatar_url, is_supporter, … }` | Bearer required |
-| jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay; 409 `job_already_active` when one is already queued/running) | Bearer required |
+| jobs | `createJob` `POST /jobs` | `client.createJob()` → 202 row (200 on idempotent replay; 409 `job_already_active` when one is already queued/running — `err.activeJobId()` gives the id to poll) | Bearer required |
 | jobs | `uploadJobAttachments` `POST /jobs/attachments` (multipart, ≤3 images) | `client.uploadJobAttachments({ files, idempotencyKey })` or `FormData` | Bearer required |
-| jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` | Bearer required |
+| jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` (retries transient network/502/429 with backoff; row carries `estimated_duration_seconds` + `queue_position`) | Bearer required |
+| jobs | `getActiveJob` `GET /jobs/active` | `client.getActiveJob()` → active row or 404 (cold start / after 409) | Bearer required |
 | jobs | `listPromptSuggestions` `GET /prompt-suggestions` | `client.listPromptSuggestions({ mode: "create", locale: "it", limit: 20 })` / `{ mode: "edit", shuffle: true, limit: 1 }` for dice | Bearer required |
-| projects | `listProjects` `GET /projects` | `client.listProjects({ visibility: "all", q })` / `client.listAllProjects()` | Bearer required |
+| projects | `listProjects` `GET /projects` | `client.listProjects({ visibility: "all", q, owner })` / `client.listAllProjects()` (`owner` = one user's shared projects, no feed download) | Bearer required |
 | projects | `createProject` `POST /projects` | `client.createProject({ name })` → 201 | Bearer required |
 | projects | `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |
 | projects | `updateProject` `PATCH /projects/{id}` | `client.updateProject(id, { name, shared })` (icon is server-managed via `…/icon`) | Bearer required |
@@ -77,7 +78,9 @@ npm run example:node-login
 | moderation | `createReport` `POST /reports` | `client.createReport()` → 201 | Bearer required |
 | moderation | `blockUser` `POST /blocks` | `client.blockUser({ blocked_id })` | Bearer required |
 | github | `exchangeGithubToken` `POST /github/token` | `client.exchangeGithubToken({ code })` | Bearer required |
-| github | `listGithubInstallations` / `saveGithubInstallation` | `client.listGithubInstallations()` / `client.saveGithubInstallation({ id, ghu })` | Bearer required |
+| github | `getGithubUser` `GET /github/user` | `client.getGithubUser()` → `{ login, avatar_url, name }` (server-side via stored token; 404 `not_connected` when unlinked) | Bearer required |
+| github | `discoverGithubInstallations` `POST /github/discover` | `client.discoverGithubInstallations({ ghu })` → `{ installations }` (fresh token, used once, never stored — pre-store picker) | Bearer required |
+| github | `listGithubInstallations` / `saveGithubInstallation` | `client.listGithubInstallations()` / `client.saveGithubInstallation({ id, ghu })` (`login/avatar/name` optional — fetched server-side when omitted) | Bearer required |
 | github | `listGithubRepositories` / `linkGithubRepository` | `client.listGithubRepositories()` / `client.linkGithubRepository()` | Bearer required |
 | github | `unlinkGithubRepository` `DELETE /github/repositories/{projectId}` | `client.unlinkGithubRepository(project_id)` → void (204) | Bearer required |
 | integrations | `createSupabaseAuthorization` `POST /integrations/supabase/authorizations` | `client.createSupabaseAuthorization({ code_challenge })` → open `authorize_url` | Bearer required |
@@ -86,11 +89,12 @@ npm run example:node-login
 | integrations | `unlinkSupabaseProject` `DELETE /integrations/supabase/links/{projectId}` | `client.unlinkSupabaseProject(project_id)` → void (204) | Bearer required |
 | integrations | `getSupabaseConnection` `GET /integrations/supabase/connection` | `client.getSupabaseConnection()` | Bearer required |
 | wallets | `getMyWallet` `GET /wallets/me` | `client.getMyWallet()` | Bearer required |
+| wallets | `getWalletSummary` `GET /wallets/me/summary` | `client.getWalletSummary()` / `client.getCreditBalance()` → `{ balance, total_granted, total_used, display_* }` (one call, no ledger pagination) | Bearer required |
 | wallets | `listMyTransactions` `GET /wallets/me/transactions` | `client.listMyTransactions()` / `client.listAllMyTransactions()` | Bearer required |
 | usage | `getUsageSummary` `GET /usage/summary` | `client.getUsageSummary({ period: "month" })` | Bearer required |
 | usage | `getUsageContributions` `GET /usage/contributions` | `client.getUsageContributions({ start_date, end_date })` | Bearer required |
 | usage | `getUsageInsights` `GET /usage/insights` | `client.getUsageInsights({ timezone })` | Bearer required |
-| notifications | `listNotifications` `GET /notifications` | `client.listNotifications()` | Bearer required |
+| notifications | `listNotifications` `GET /notifications` | `client.listNotifications()` (rows carry `sender_id` + `sender{username,avatar_url}` + `project_icon_url`) | Bearer required |
 | notifications | `getUnreadCount` `GET /notifications/unread-count` | `client.getUnreadCount()` | Bearer required |
 | notifications | `markNotificationRead` `PATCH /notifications/{id}` | `client.markNotificationRead(id)` | Bearer required |
 | notifications | `markAllNotificationsRead` `PATCH /notifications` | `client.markAllNotificationsRead()` → `{ updated_count }` | Bearer required |
@@ -103,6 +107,22 @@ npm run example:node-login
 | live-activity | `removeLiveActivityUpdateToken` `DELETE /live-activity/update-tokens/{jobId}` | `client.removeLiveActivityUpdateToken(job_id)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
+> Migration notes (0.14.0): new `GET /jobs/active` (`getActiveJob()` —
+> cold start / after 409 `job_already_active`, whose id is also on
+> `err.activeJobId()`), `GET /wallets/me/summary` (`getWalletSummary()` /
+> `getCreditBalance()` alias — replaces ledger pagination for the budget
+> bar), `GET /github/user` (`getGithubUser()` — replaces direct
+> `api.github.com` fetches), `GET /projects?owner=` (`listProjects({ owner
+> })` — foreign profiles without feed download), `estimated_duration_seconds`
+> + `queue_position` on `Job` (indicative only), `sender_id` +
+> `project_icon_url` on `Notification`, `waitForJob` retries transient
+> network/502/429 with backoff (`retryNetworkErrors`/`maxNetworkRetries`),
+> `onAuthStateChange()` listener (Supabase-style handle), `isUsernameTaken()`
+> / `isNotConnected()` / `isNetworkError()` / `isRetryable()` error helpers,
+> typed `SupabaseProject` rows, and attachment constants
+> (`JOB_ATTACHMENT_MAX_COUNT/MAX_BYTES/ALLOWED_MIMES`,
+> `isAllowedAttachmentMime()`).
+>
 > Migration notes (0.13.0): `POST /jobs` enforces a single active job per
 > user — a second call while one is `queued`/`running` returns 409
 > `job_already_active` (catch with `err.isJobAlreadyActive()` and poll the

@@ -56,6 +56,15 @@ export interface ExchangeCodeInput {
   redirectUri: string;
 }
 
+export type AuthChangeEvent = "SIGNED_IN" | "SIGNED_OUT" | "TOKEN_REFRESHED" | "USER_UPDATED";
+
+export interface AuthState {
+  event: AuthChangeEvent;
+  session: Session | null;
+}
+
+export type AuthChangeListener = (event: AuthChangeEvent, session: Session | null) => void;
+
 /**
  * Dynamic authentication: the SDK is born **anonymous** (`isAuthenticated() === false`)
  * and becomes authenticated through `beginLogin()` + `exchangeCode()` (or the
@@ -70,6 +79,7 @@ export class AuthManager {
   private readonly pkceCrypto?: PkceCrypto;
   private clientId?: string;
   private session: Session | null = null;
+  private readonly listeners = new Set<AuthChangeListener>();
   /**
    * Single-flight guard for `refresh()`: refresh tokens are single-use
    * (the server invalidates the previous token on every rotation), so N
@@ -127,6 +137,7 @@ export class AuthManager {
   /** Inject a session obtained elsewhere (e.g. restored refresh flow). */
   setSession(input: SetSessionInput): Session {
     if (!input.access_token) throw new MichelangeloAuthError("setSession: missing access_token");
+    const hadSession = this.session !== null;
     this.session = {
       accessToken: input.access_token,
       refreshToken: input.refresh_token ?? this.session?.refreshToken,
@@ -137,13 +148,50 @@ export class AuthManager {
       clientId: input.client_id ?? this.clientId,
     };
     if (input.client_id) this.clientId = input.client_id;
-    return this.getSession() as Session;
+    const next = this.getSession() as Session;
+    this.emit(hadSession ? "TOKEN_REFRESHED" : "SIGNED_IN", next);
+    return next;
   }
 
   /** Back to anonymous — drops the in-memory token. */
   logout(): void {
+    const hadSession = this.session !== null;
     this.session = null;
     this.lastRefreshFailure = null;
+    if (hadSession) this.emit("SIGNED_OUT", null);
+  }
+
+  /**
+   * Subscribe to in-memory auth events (`SIGNED_IN` on null → session,
+   * `TOKEN_REFRESHED` on rotation, `SIGNED_OUT` on logout). Storage-agnostic
+   * by design: persistence and cross-tab sync stay in the app (SecureStore /
+   * localStorage + Web Locks) — this only mirrors the Supabase listener
+   * shape so UI layers can sync React state without polling `getSession()`.
+   * Returns a Supabase-style subscription handle.
+   */
+  onAuthStateChange(listener: AuthChangeListener): {
+    data: { subscription: { unsubscribe: () => void } };
+  } {
+    this.listeners.add(listener);
+    return {
+      data: {
+        subscription: {
+          unsubscribe: () => {
+            this.listeners.delete(listener);
+          },
+        },
+      },
+    };
+  }
+
+  private emit(event: AuthChangeEvent, session: Session | null): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(event, session ? { ...session } : null);
+      } catch {
+        // Listener errors must never break auth state transitions.
+      }
+    }
   }
 
   /** `Authorization` header value for the current session, if any. */

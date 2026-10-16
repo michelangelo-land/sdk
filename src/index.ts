@@ -1,5 +1,5 @@
 export { AuthManager } from "./auth.js";
-export type { BeginLoginInput, BeginLoginResult, ExchangeCodeInput } from "./auth.js";
+export type { BeginLoginInput, BeginLoginResult, ExchangeCodeInput, AuthChangeEvent, AuthChangeListener, AuthState } from "./auth.js";
 export { MichelangeloClient } from "./client.js";
 export type { MichelangeloClientOptions, RequestOptions } from "./client.js";
 export {
@@ -14,6 +14,12 @@ export {
 export { MichelangeloApiError, MichelangeloAuthError } from "./errors.js";
 export { defaultFetch } from "./http.js";
 export { generateCodeChallenge, generateCodeVerifier, generateState, setPkceCrypto } from "./pkce.js";
+export {
+  isAllowedAttachmentMime,
+  JOB_ATTACHMENT_ALLOWED_MIMES,
+  JOB_ATTACHMENT_MAX_BYTES,
+  JOB_ATTACHMENT_MAX_COUNT,
+} from "./types.js";
 export type { PkceCrypto } from "./pkce.js";
 export type {
   ApiErrorBody,
@@ -35,6 +41,9 @@ export type {
   DeprecatedGithubPushJobRequest,
   DeprecatedJobPushFields,
   DeviceType,
+  DiscoverGithubInstallationsRequest,
+  DiscoverGithubInstallationsResponse,
+  DiscoveredGithubInstallation,
   DrainPreviewErrorsResponse,
   ExchangeGithubTokenRequest,
   ExchangeGithubTokenResponse,
@@ -47,8 +56,10 @@ export type {
   GithubPushResult,
   GithubRepositoriesPage,
   GithubRepository,
+  GithubUser,
   HealthResponse,
   Job,
+  JobAttachmentMime,
   JobAttachmentRef,
   JobInput,
   JobStatus,
@@ -116,6 +127,8 @@ export type {
   StartSupabaseOAuthResponse,
   SupabaseConnection,
   SupabaseLinkResult,
+  SupabaseOrganization,
+  SupabaseProject,
   SupabaseProjectLink,
   SupabaseProjectsResponse,
   SupabaseProjectsResult,
@@ -130,6 +143,7 @@ export type {
   UsageSummary,
   WaitForJobOptions,
   Wallet,
+  WalletSummary,
   WalletTransaction,
   WalletTransactionReason,
   WalletTransactionsPage,

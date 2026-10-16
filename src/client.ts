@@ -15,6 +15,9 @@ import type {
   CreateReportRequest,
   CreateSupabaseAuthorizationRequest,
   CreateSupabaseAuthorizationResponse,
+  DiscoverGithubInstallationsRequest,
+  DiscoverGithubInstallationsResponse,
+  DiscoveredGithubInstallation,
   DrainPreviewErrorsResponse,
   ExchangeGithubTokenRequest,
   ExchangeGithubTokenResponse,
@@ -27,6 +30,7 @@ import type {
   GithubPushResult,
   GithubRepositoriesPage,
   GithubRepository,
+  GithubUser,
   HealthResponse,
   Job,
   JobStatus,
@@ -82,6 +86,7 @@ import type {
   UsageInsights,
   UsageSummary,
   Wallet,
+  WalletSummary,
   WalletTransactionsPage,
   WaitForJobOptions,
   Whoami,
@@ -355,6 +360,16 @@ export class MichelangeloClient {
   }
 
   /**
+   * `GET /jobs/active` — the caller's single active job (`queued`/`running`).
+   * 404 when idle. Use on cold start or after catching
+   * `job_already_active` (whose `details.job_id` already points at it —
+   * see `err.activeJobId()`).
+   */
+  getActiveJob(): Promise<Job> {
+    return this.request<Job>("/jobs/active");
+  }
+
+  /**
    * Poll `getJob` until a terminal status (`succeeded`/`failed`/`canceled`)
    * and return the final snapshot — the call never waits server-side.
    * Backoff doubles from `minDelayMs` (default 2s) to `maxDelayMs`
@@ -365,10 +380,44 @@ export class MichelangeloClient {
     const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
     const minDelayMs = options.minDelayMs ?? 2000;
     const maxDelayMs = options.maxDelayMs ?? 30000;
+    const retryNetworkErrors = options.retryNetworkErrors ?? true;
+    const maxNetworkRetries = options.maxNetworkRetries ?? 10;
     const deadline = Date.now() + timeoutMs;
     let delay = minDelayMs;
+    let networkRetries = 0;
     for (;;) {
-      const job = await this.getJob(jobId);
+      let job: Job;
+      try {
+        job = await this.getJob(jobId);
+      } catch (err) {
+        // Transient transport failure: back off and retry instead of
+        // aborting the whole wait (mobile networks flap). AbortSignal
+        // and timeouts still throw immediately. Cap consecutive retries
+        // so a dead backend surfaces instead of polling forever.
+        if (
+          retryNetworkErrors &&
+          err instanceof MichelangeloApiError &&
+          (err.isNetworkError() || err.status === 502 || err.status === 429) &&
+          networkRetries < maxNetworkRetries
+        ) {
+          networkRetries += 1;
+          if (Date.now() + delay > deadline) {
+            throw new MichelangeloApiError({
+              status: 0,
+              code: "job_timeout",
+              message: `waitForJob timed out after ${timeoutMs}ms (last error: ${err.code})`,
+            });
+          }
+          await sleep(
+            err.retryAfter !== undefined && err.status === 429 ? err.retryAfter * 1000 : delay,
+            options.signal,
+          );
+          delay = Math.min(delay * 2, maxDelayMs);
+          continue;
+        }
+        throw err;
+      }
+      networkRetries = 0;
       options.onProgress?.(job);
       if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
       if (Date.now() + delay > deadline) {
@@ -411,13 +460,15 @@ export class MichelangeloClient {
    * `GET /projects` — page of projects (`mine` by default, `all` for the
    * community view). `next_cursor` feeds the next call's `cursor`. Pass `q`
    * for full-text search via RPC `match_project` (RLS still applies) — this
-   * replaces the removed `GET /explore/projects` endpoint.
+   * replaces the removed `GET /explore/projects` endpoint. Pass `owner` to
+   * list one user's shared projects without downloading the feed.
    */
   listProjects(options: ListProjectsOptions = {}): Promise<ProjectPage> {
     const params = new URLSearchParams();
     params.set("limit", String(options.limit ?? 20));
     params.set("visibility", options.visibility ?? "mine");
     if (options.cursor !== undefined) params.set("cursor", options.cursor);
+    if (options.owner !== undefined) params.set("owner", options.owner);
     if (options.q !== undefined) params.set("q", options.q);
     return this.request<ProjectPage>(`/projects?${params.toString()}`);
   }
@@ -435,6 +486,7 @@ export class MichelangeloClient {
       const res = await this.listProjects({
         limit,
         visibility: options.visibility,
+        ...(options.owner !== undefined ? { owner: options.owner } : {}),
         ...(options.q !== undefined ? { q: options.q } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
       });
@@ -623,9 +675,33 @@ export class MichelangeloClient {
     return this.request<GithubInstallationsPage>("/github/installations");
   }
 
+  /**
+   * `GET /github/user` — GitHub profile (`login,avatar_url,name`) proxied
+   * server-side via the stored `ghu` token. Replaces direct
+   * `fetch("https://api.github.com/user")` in clients. 404 `not_connected`
+   * (see `err.isNotConnected()`) when no token is stored.
+   */
+  getGithubUser(): Promise<GithubUser> {
+    return this.request<GithubUser>("/github/user");
+  }
+
   /** `POST /github/installations` — store installation after OAuth (upsert on `id`). */
   saveGithubInstallation(input: SaveGithubInstallationRequest): Promise<GithubInstallation> {
     return this.request<GithubInstallation>("/github/installations", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  /**
+   * `POST /github/discover` — installations visible to a fresh OAuth token
+   * (pre-store discovery, used once and never stored). Replaces direct
+   * `fetch("https://api.github.com/user/installations")` in clients.
+   */
+  discoverGithubInstallations(
+    input: DiscoverGithubInstallationsRequest,
+  ): Promise<DiscoverGithubInstallationsResponse> {
+    return this.request<DiscoverGithubInstallationsResponse>("/github/discover", {
       method: "POST",
       body: input,
     });
@@ -716,6 +792,20 @@ export class MichelangeloClient {
    */
   getMyWallet(): Promise<Wallet> {
     return this.request<Wallet>("/wallets/me");
+  }
+
+  /**
+   * `GET /wallets/me/summary` — balance plus lifetime `total_granted` /
+   * `total_used` in one call (replaces ledger pagination for the budget
+   * bar). Render `display_*` verbatim.
+   */
+  getWalletSummary(): Promise<WalletSummary> {
+    return this.request<WalletSummary>("/wallets/me/summary");
+  }
+
+  /** Alias of `getWalletSummary()` (PM wording: `getCreditBalance()`). */
+  getCreditBalance(): Promise<WalletSummary> {
+    return this.getWalletSummary();
   }
 
   /**
