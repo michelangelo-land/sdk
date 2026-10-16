@@ -27,6 +27,7 @@ const EXPECTED = {
     "getUsageContributions",     "getUsageInsights", "listNotifications", "getUnreadCount",
     "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
     "listLiveActivityTokens", "registerLiveActivityToken", "removeLiveActivityToken",
+    "registerLiveActivityUpdateToken", "removeLiveActivityUpdateToken",
   ],
   paths: [
     "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar", "/users/{userId}",
@@ -44,6 +45,7 @@ const EXPECTED = {
     "/usage/insights", "/notifications", "/notifications/unread-count",
     "/notifications/{notificationId}", "/push-tokens", "/push-tokens/{token}",
     "/live-activity/tokens", "/live-activity/tokens/{token}",
+    "/live-activity/update-tokens", "/live-activity/update-tokens/{jobId}",
   ],
   // Client-covered operations. Deliberately skipped: getOpenApiDocument/getDocs
   // (meta) and handleBillingWebhook/handleGithubWebhook (signed server hooks).
@@ -61,6 +63,7 @@ const EXPECTED = {
     "getUsageContributions", "getUsageInsights", "listNotifications", "getUnreadCount",
     "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
     "listLiveActivityTokens", "registerLiveActivityToken", "removeLiveActivityToken",
+    "registerLiveActivityUpdateToken", "removeLiveActivityUpdateToken",
     "createBillingCheckout", "saveGithubInstallation", "unlinkGithubRepository",
     "unlinkSupabaseProject",
   ],

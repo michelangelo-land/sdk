@@ -99,8 +99,17 @@ npm run example:node-login
 | live-activity | `listLiveActivityTokens` `GET /live-activity/tokens` | `client.listLiveActivityTokens()` | Bearer required |
 | live-activity | `registerLiveActivityToken` `POST /live-activity/tokens` | `client.registerLiveActivityToken({ push_to_start_token })` → 201 | Bearer required |
 | live-activity | `removeLiveActivityToken` `DELETE /live-activity/tokens/{token}` | `client.removeLiveActivityToken(token)` → void (204) | Bearer required |
+| live-activity | `registerLiveActivityUpdateToken` `POST /live-activity/update-tokens` | `client.registerLiveActivityUpdateToken({ job_id, update_token, activity_id })` → 201 | Bearer required |
+| live-activity | `removeLiveActivityUpdateToken` `DELETE /live-activity/update-tokens/{jobId}` | `client.removeLiveActivityUpdateToken(job_id)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
+> Migration notes (0.12.0): new `POST /live-activity/update-tokens` +
+> `DELETE /live-activity/update-tokens/{jobId}`
+> (`registerLiveActivityUpdateToken()` / `removeLiveActivityUpdateToken()`).
+> After a remote start, report the per-activity token with the `job_id` from
+> the start props — the server trigger reads this table (never `jobs.input`)
+> to send `update`/`end` pushes.
+>
 > Migration notes (0.11.0): new `live-activity` tag — `GET|POST
 > /live-activity/tokens` + `DELETE /live-activity/tokens/{token}`
 > (`listLiveActivityTokens()` / `registerLiveActivityToken()` /
@@ -172,6 +181,10 @@ await client.createJob({
 // takes expo_push_token / live_activity_* — the server reads these tables):
 await client.registerPushToken({ token: expoPushToken, device_type: "ios" });
 await client.registerLiveActivityToken({ push_to_start_token });
+// After a remote start, bind the per-activity token to its job (job_id comes
+// from the start props, token from getPushToken()/addPushTokenListener) so the
+// server can send update/end pushes for that job:
+await client.registerLiveActivityUpdateToken({ job_id: job.id, update_token, activity_id });
 
 // Author of a project (community cards show the `author` embed; `user_id` for the full hero):
 const author = project.author; // { username, avatar_url } | null

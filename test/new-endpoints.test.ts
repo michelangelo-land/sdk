@@ -539,4 +539,40 @@ describe("live activity tokens", () => {
     await client.removeLiveActivityToken({ token: "pts-y" });
     assert.ok(deleteUrl.endsWith("/live-activity/tokens/pts-y"), deleteUrl);
   });
+
+  it("register/remove live-activity update tokens", async () => {
+    let deleteUrl = "";
+    const jobId = "22222222-2222-4222-8222-222222222222";
+    const fetchFn = stubFetch((url, init) => {
+      const u = String(url);
+      const method = init?.method ?? "GET";
+      if (u.endsWith("/live-activity/update-tokens") && method === "POST") {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          job_id: jobId,
+          update_token: "upd-x",
+          activity_id: "act-1",
+        });
+        return json({ job_id: jobId, update_token: "upd-x", activity_id: "act-1" }, 201);
+      }
+      if (u.includes("/live-activity/update-tokens/") && method === "DELETE") {
+        deleteUrl = u;
+        assert.equal(init?.body, undefined);
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected ${method} ${u}`);
+    });
+    const client = authed(fetchFn);
+    const reg = await client.registerLiveActivityUpdateToken({
+      job_id: jobId,
+      update_token: "upd-x",
+      activity_id: "act-1",
+    });
+    assert.equal(reg.job_id, jobId);
+    assert.equal(reg.update_token, "upd-x");
+    assert.equal(await client.removeLiveActivityUpdateToken(jobId), undefined);
+    assert.ok(deleteUrl.endsWith(`/live-activity/update-tokens/${jobId}`), deleteUrl);
+    // object form as well
+    await client.removeLiveActivityUpdateToken({ job_id: jobId });
+    assert.ok(deleteUrl.endsWith(`/live-activity/update-tokens/${jobId}`), deleteUrl);
+  });
 });

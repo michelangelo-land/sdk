@@ -774,6 +774,32 @@ export interface RemoveLiveActivityTokenRequest {
   token: string;
 }
 
+// --- live-activity update tokens → `registerLiveActivityUpdateToken`/`removeLiveActivityUpdateToken` ---
+
+/** `POST /live-activity/update-tokens` — one row per `job_id`. */
+export interface RegisterLiveActivityUpdateTokenRequest {
+  job_id: string;
+  update_token: string;
+  activity_id?: string;
+}
+
+/** `live_activity_update_tokens` row (201). */
+export interface LiveActivityUpdateToken {
+  job_id: string;
+  user_id?: string;
+  update_token: string;
+  activity_id?: string | null;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+/** `POST /live-activity/update-tokens` — registered row (201). */
+export type RegisterLiveActivityUpdateTokenResponse = LiveActivityUpdateToken;
+
+export interface RemoveLiveActivityUpdateTokenRequest {
+  job_id: string;
+}
+
 // --- `#/components/schemas/Error` (401/400/404/429 bodies) ---
 export interface ApiErrorBody {
   code: string;

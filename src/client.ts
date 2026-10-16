@@ -35,9 +35,13 @@ import type {
   LinkSupabaseProjectResponse,
   ListAllProjectsOptions,
   LiveActivityTokensPage,
+  LiveActivityUpdateToken,
   RegisterLiveActivityTokenRequest,
   RegisterLiveActivityTokenResponse,
+  RegisterLiveActivityUpdateTokenRequest,
+  RegisterLiveActivityUpdateTokenResponse,
   RemoveLiveActivityTokenRequest,
+  RemoveLiveActivityUpdateTokenRequest,
   ListExploreProjectsOptions,
   ListNotificationsOptions,
   ListProjectFilesOptions,
@@ -866,6 +870,36 @@ export class MichelangeloClient {
   async removeLiveActivityToken(input: RemoveLiveActivityTokenRequest | string): Promise<void> {
     const token = typeof input === "string" ? input : input.token;
     await this.request<void>(`/live-activity/tokens/${encodeURIComponent(token)}`, {
+      method: "DELETE",
+    });
+  }
+
+  /**
+   * `POST /live-activity/update-tokens` — store the APNs per-activity update
+   * token for one job (upsert on `job_id`). The device reports it after a
+   * remote `start`: the `job_id` comes from the start props
+   * (`getInstances()` gives the instance, `getPushToken()` /
+   * `addPushTokenListener()` the token). The server trigger reads this row —
+   * never `jobs.input` — to send `update`/`end` pushes. The job must belong
+   * to the caller (404 `job_not_found` otherwise).
+   */
+  registerLiveActivityUpdateToken(
+    input: RegisterLiveActivityUpdateTokenRequest,
+  ): Promise<RegisterLiveActivityUpdateTokenResponse> {
+    return this.request<RegisterLiveActivityUpdateTokenResponse>("/live-activity/update-tokens", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  /**
+   * `DELETE /live-activity/update-tokens/{jobId}` — remove the update-token
+   * row of a job (cleanup after `end`/dismiss). Idempotent: 204 even when no
+   * row exists. Accepts the raw job id string or the `{ job_id }` object form.
+   */
+  async removeLiveActivityUpdateToken(input: RemoveLiveActivityUpdateTokenRequest | string): Promise<void> {
+    const jobId = typeof input === "string" ? input : input.job_id;
+    await this.request<void>(`/live-activity/update-tokens/${encodeURIComponent(jobId)}`, {
       method: "DELETE",
     });
   }
