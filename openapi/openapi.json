@@ -2320,6 +2320,40 @@
       }
     },
     "/integrations/supabase/connection": {
+      "delete": {
+        "tags": [
+          "integrations"
+        ],
+        "operationId": "disconnectSupabaseConnection",
+        "summary": "Disconnect the caller's Supabase account",
+        "description": "Deletes every `supabase_project_links` row owned by the caller first, then the caller's `supabase_connections` row. Always scoped to `user_id` from the JWT. Idempotent: 204 even when no rows exist. There is no upstream revoke endpoint on the connect-supabase edge, so the OAuth token is deleted from the DB only and is no longer retrievable from the API.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Supabase account disconnected (idempotent)"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "502": {
+            "description": "Upstream delete failed — same sanitized Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "tags": [
           "integrations"
@@ -3350,7 +3384,7 @@
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 120
+            "maxLength": 30
           },
           "shared": {
             "type": "boolean",
@@ -3365,7 +3399,7 @@
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 120
+            "maxLength": 30
           },
           "shared": {
             "type": "boolean"

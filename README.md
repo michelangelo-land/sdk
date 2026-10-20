@@ -416,10 +416,9 @@ open; `exchangeCode()` then stores (and, with `storage`, persists) the session.
 - `npm run contract -- --offline` (or `CONTRACT_OFFLINE=1`) — validate only `openapi/openapi.json` against EXPECTED without network (CI sandboxes); pending-deploy operations warn instead of failing
 - `npm run type-check` / `npm run build` / `npm test`
 
-> Deploy note: `disconnectSupabaseConnection` (`DELETE
-> /integrations/supabase/connection`) is in EXPECTED as pending-deploy. The
-> offline check passes today; once the API ships it, run `npm run sync:openapi`
-> and re-run the live `npm run contract` (it fails until then, by design).
+> Release note: `disconnectSupabaseConnection` (`DELETE
+> /integrations/supabase/connection`) shipped with API `c80606a`; the vendored
+> swagger was re-synced for 0.15.0 and the live contract check passes.
 
 ## Publishing (trusted publishing, no npm token)
 

@@ -91,7 +91,7 @@ const EXPECTED = {
   ],
   // Approved by the lead but not deployed yet. Offline tolerates their
   // absence (warning); the live check fails until the API ships them.
-  pendingDeploy: ["disconnectSupabaseConnection"],
+  pendingDeploy: [],
 };
 
 function collectOperations(doc) {
