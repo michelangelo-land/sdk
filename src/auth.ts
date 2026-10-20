@@ -8,6 +8,7 @@ import {
 import { MichelangeloAuthError } from "./errors.js";
 import { defaultFetch } from "./http.js";
 import { generateCodeChallenge, generateCodeVerifier, generateState, type PkceCrypto } from "./pkce.js";
+import type { PersistedSession, SessionLock, SessionStorage } from "./storage.js";
 import type {
   RegisterClientInput,
   RegisteredClient,
@@ -31,6 +32,17 @@ export interface AuthManagerOptions {
   fetchFn?: typeof fetch;
   /** PKCE backend — defaults to WebCrypto; inject the expo-crypto adapter on Hermes. */
   pkceCrypto?: PkceCrypto;
+  /**
+   * Opt-in persistence. Without it tokens stay in memory (the safe default).
+   * When provided, `setSession`/`exchangeCode`/`refresh` save rotated tokens
+   * and `logout` clears them — storage failures never break auth.
+   */
+  storage?: SessionStorage;
+  /**
+   * Opt-in cross-tab mutex (e.g. Web Locks API). When provided, `refresh()`
+   * runs read→adopt→rotate→save inside one `request()` callback.
+   */
+  lock?: SessionLock;
 }
 
 export interface BeginLoginInput {
@@ -70,13 +82,18 @@ export type AuthChangeListener = (event: AuthChangeEvent, session: Session | nul
  * and becomes authenticated through `beginLogin()` + `exchangeCode()` (or the
  * `loginWithLoopback()` helper in `node-loopback.js`).
  *
- * Tokens live **only in memory** — the SDK never touches localStorage, disk or
- * keychain. `client.request()` reads the token from here on every call.
+ * Tokens live **in memory** by default — the SDK never touches localStorage,
+ * disk or keychain unless a `storage` adapter is injected (opt-in). Tokens
+ * are persisted only on rotation (`setSession`/`exchangeCode`/`refresh`);
+ * `restoreSession()` adopts a stored session at cold start without
+ * re-saving it. `client.request()` reads the token from here on every call.
  */
 export class AuthManager {
   private readonly authBaseUrl: string;
   private readonly fetchFn: typeof fetch;
   private readonly pkceCrypto?: PkceCrypto;
+  private readonly storage?: SessionStorage;
+  private readonly lock?: SessionLock;
   private clientId?: string;
   private session: Session | null = null;
   private readonly listeners = new Set<AuthChangeListener>();
@@ -104,11 +121,21 @@ export class AuthManager {
    * `REFRESH_FAILURE_COOLDOWN_MS` in @supabase/auth-js.
    */
   private lastRefreshFailure: { refreshToken: string; at: number } | null = null;
+  /** Serializes storage writes so a fast rotation never lands before a slower one. */
+  private storageWrite: Promise<void> = Promise.resolve();
+  /** Count of in-flight async storage operations (sync adapters stay at 0). */
+  private storagePending = 0;
+  /** True only while an *async* storage operation is in flight. */
+  private storageBusy = false;
+  /** Invalidates queued writes when the user logs out mid-rotation. */
+  private storageEpoch = 0;
 
   constructor(options: AuthManagerOptions = {}) {
     this.authBaseUrl = (options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL).replace(/\/$/, "");
     this.fetchFn = options.fetchFn ?? defaultFetch;
     this.pkceCrypto = options.pkceCrypto;
+    this.storage = options.storage;
+    this.lock = options.lock;
     this.clientId = options.clientId;
   }
 
@@ -134,8 +161,79 @@ export class AuthManager {
     return this.session ? { ...this.session } : null;
   }
 
-  /** Inject a session obtained elsewhere (e.g. restored refresh flow). */
+  /**
+   * Inject a session obtained elsewhere (e.g. restored refresh flow).
+   * When `storage` is configured, changed tokens are persisted
+   * fire-and-forget — storage errors never fail the auth transition.
+   */
   setSession(input: SetSessionInput): Session {
+    const previous = this.session;
+    const next = this.applySession(input);
+    this.persistIfChanged(previous, next);
+    return next;
+  }
+
+  /**
+   * Cold-start helper: adopt a persisted session into memory and return it.
+   * Emits `SIGNED_IN` when the SDK was anonymous. Never re-saves the loaded
+   * tokens, so storage listeners cannot loop. Resolves `null` when no
+   * storage is configured, the store is empty, or `load()` throws.
+   */
+  async restoreSession(): Promise<Session | null> {
+    const storage = this.storage;
+    if (!storage) return null;
+    let persisted: PersistedSession | null;
+    try {
+      persisted = await storage.load();
+    } catch {
+      return null;
+    }
+    if (!persisted?.accessToken) return null;
+    // An expired access token is still recoverable via refresh; without a
+    // refresh token the stored session is definitively dead.
+    if (
+      typeof persisted.expiresAt === "number" &&
+      persisted.expiresAt <= Date.now() &&
+      !persisted.refreshToken
+    ) {
+      return null;
+    }
+
+    const previous = this.session;
+    if (
+      previous &&
+      previous.accessToken === persisted.accessToken &&
+      previous.refreshToken === persisted.refreshToken
+    ) {
+      return this.getSession();
+    }
+
+    this.session = {
+      accessToken: persisted.accessToken,
+      refreshToken: persisted.refreshToken,
+      expiresAt: persisted.expiresAt,
+      clientId: persisted.clientId,
+    };
+    if (persisted.clientId) this.clientId = persisted.clientId;
+    const next = this.getSession() as Session;
+    this.emit(previous ? "TOKEN_REFRESHED" : "SIGNED_IN", next);
+    return next;
+  }
+
+  /** Back to anonymous — drops the in-memory token and clears storage (best-effort). */
+  logout(): void {
+    const hadSession = this.session !== null;
+    this.session = null;
+    this.lastRefreshFailure = null;
+    const storage = this.storage;
+    if (storage) {
+      this.storageEpoch += 1;
+      this.enqueueClear(storage);
+    }
+    if (hadSession) this.emit("SIGNED_OUT", null);
+  }
+
+  private applySession(input: SetSessionInput): Session {
     if (!input.access_token) throw new MichelangeloAuthError("setSession: missing access_token");
     const hadSession = this.session !== null;
     this.session = {
@@ -153,21 +251,154 @@ export class AuthManager {
     return next;
   }
 
-  /** Back to anonymous — drops the in-memory token. */
-  logout(): void {
-    const hadSession = this.session !== null;
-    this.session = null;
-    this.lastRefreshFailure = null;
-    if (hadSession) this.emit("SIGNED_OUT", null);
+  private persistIfChanged(previous: Session | null, next: Session): void {
+    if (!this.storage) return;
+    if (
+      previous &&
+      previous.accessToken === next.accessToken &&
+      previous.refreshToken === next.refreshToken
+    ) {
+      return;
+    }
+    this.saveToStorage(next);
+  }
+
+  private saveToStorage(session: Session): void {
+    const storage = this.storage;
+    if (!storage) return;
+    const persisted = toPersistedSession(session);
+    const epoch = this.storageEpoch;
+    if (!this.storageBusy) {
+      const pending = this.performSave(storage, persisted, epoch);
+      if (pending) this.startPending(pending);
+      return;
+    }
+    void this.enqueueStorage(async () => {
+      const pending = this.performSave(storage, persisted, epoch);
+      if (pending) await pending;
+    });
+  }
+
+  private async saveToStorageNow(session: Session): Promise<void> {
+    const storage = this.storage;
+    if (!storage) return;
+    const persisted = toPersistedSession(session);
+    const epoch = this.storageEpoch;
+    await this.enqueueStorage(async () => {
+      const pending = this.performSave(storage, persisted, epoch);
+      if (pending) await pending;
+    });
+  }
+
+  private enqueueStorage(run: () => Promise<void> | null): Promise<void> {
+    this.storagePending += 1;
+    this.storageBusy = true;
+    const tracked = this.storageWrite
+      .then(async () => {
+        const pending = run();
+        if (pending) await pending;
+      })
+      .catch(() => {})
+      .then(() => {
+        this.storagePending -= 1;
+        if (this.storagePending === 0) this.storageBusy = false;
+      });
+    this.storageWrite = tracked;
+    return tracked;
+  }
+
+  /** Track an already-started async operation without adding a queue hop. */
+  private startPending(pending: Promise<void>): void {
+    this.storagePending += 1;
+    this.storageBusy = true;
+    this.storageWrite = pending
+      .then(
+        () => {},
+        () => {},
+      )
+      .then(() => {
+        this.storagePending -= 1;
+        if (this.storagePending === 0) this.storageBusy = false;
+      });
+  }
+
+  private enqueueClear(storage: SessionStorage): void {
+    if (!this.storageBusy) {
+      const pending = this.performClear(storage);
+      if (pending) this.startPending(pending);
+      return;
+    }
+    void this.enqueueStorage(async () => {
+      const pending = this.performClear(storage);
+      if (pending) await pending;
+    });
+  }
+
+  private performSave(
+    storage: SessionStorage,
+    persisted: PersistedSession,
+    epoch: number,
+  ): Promise<void> | null {
+    // A logout landed while this write was queued: never resurrect tokens.
+    if (epoch !== this.storageEpoch) return null;
+    try {
+      const result = storage.save(persisted);
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).catch(() => {});
+      }
+    } catch {
+      // Best-effort: persistence must never break authentication.
+    }
+    return null;
+  }
+
+  private performClear(storage: SessionStorage): Promise<void> | null {
+    try {
+      const result = storage.clear();
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).catch(() => {});
+      }
+    } catch {
+      // Best-effort: a broken storage adapter must not block logout.
+    }
+    return null;
+  }
+
+  /**
+   * Read the shared store inside the refresh lock and adopt a *newer*
+   * refresh token written by another tab. Returns true when memory changed.
+   * Does not emit or re-save: the rotation that follows emits/saves.
+   */
+  private async adoptStoredSession(): Promise<boolean> {
+    const storage = this.storage;
+    if (!storage) return false;
+    let persisted: PersistedSession | null;
+    try {
+      persisted = await storage.load();
+    } catch {
+      return false;
+    }
+    const current = this.session;
+    if (!persisted?.accessToken || !persisted.refreshToken) return false;
+    if (persisted.refreshToken === current?.refreshToken) return false;
+
+    this.session = {
+      accessToken: persisted.accessToken,
+      refreshToken: persisted.refreshToken,
+      expiresAt: persisted.expiresAt,
+      clientId: persisted.clientId,
+    };
+    if (persisted.clientId) this.clientId = persisted.clientId;
+    return true;
   }
 
   /**
    * Subscribe to in-memory auth events (`SIGNED_IN` on null → session,
-   * `TOKEN_REFRESHED` on rotation, `SIGNED_OUT` on logout). Storage-agnostic
-   * by design: persistence and cross-tab sync stay in the app (SecureStore /
-   * localStorage + Web Locks) — this only mirrors the Supabase listener
-   * shape so UI layers can sync React state without polling `getSession()`.
-   * Returns a Supabase-style subscription handle.
+   * `TOKEN_REFRESHED` on rotation, `SIGNED_OUT` on logout). Persistence is
+   * opt-in via the injected `storage` adapter; without one the SDK never
+   * touches disk/keychain/localStorage. The listener shape mirrors the
+   * Supabase handle so UI layers can sync React state without polling
+   * `getSession()`. Returns a Supabase-style subscription handle.
    */
   onAuthStateChange(listener: AuthChangeListener): {
     data: { subscription: { unsubscribe: () => void } };
@@ -299,11 +530,33 @@ export class AuthManager {
    * later expiry triggers a fresh rotation. Serial callers re-presenting a
    * token that just failed fail fast within the cooldown window instead of
    * hammering the token endpoint.
+   *
+   * With a `lock`, the whole rotation runs inside `lock.request(...)`:
+   * re-read storage, adopt a newer refresh token written by another tab,
+   * rotate, then wait for the save before releasing the lock. A
+   * `token_failed` rotation (another tab won the race) adopts storage again
+   * and retries exactly once. Without a lock, only in-process single-flight
+   * plus persistence applies.
    */
   async refresh(): Promise<Session> {
     const inFlight = this.refreshPromise;
     if (inFlight) return inFlight;
-    const currentToken = this.session?.refreshToken;
+    const started = this.lock ? this.refreshWithLock(this.lock) : this.refreshWithoutLock();
+    this.refreshPromise = started;
+    try {
+      const session = await started;
+      this.lastRefreshFailure = null;
+      return session;
+    } catch (err) {
+      const failedToken = this.session?.refreshToken;
+      if (failedToken) this.lastRefreshFailure = { refreshToken: failedToken, at: Date.now() };
+      throw err;
+    } finally {
+      if (this.refreshPromise === started) this.refreshPromise = null;
+    }
+  }
+
+  private throwIfCoolingDown(currentToken: string | undefined): void {
     const cooled = this.lastRefreshFailure;
     if (
       currentToken &&
@@ -313,21 +566,37 @@ export class AuthManager {
     ) {
       throw new MichelangeloAuthError("refresh: cooling down after recent failure", "cooldown");
     }
-    const started = this.doRefresh();
-    this.refreshPromise = started;
-    try {
-      const session = await started;
-      this.lastRefreshFailure = null;
-      return session;
-    } catch (err) {
-      if (currentToken) this.lastRefreshFailure = { refreshToken: currentToken, at: Date.now() };
-      throw err;
-    } finally {
-      if (this.refreshPromise === started) this.refreshPromise = null;
-    }
   }
 
-  private async doRefresh(): Promise<Session> {
+  private refreshWithoutLock(): Promise<Session> {
+    this.throwIfCoolingDown(this.session?.refreshToken);
+    return this.doRefresh(false);
+  }
+
+  private refreshWithLock(lock: SessionLock): Promise<Session> {
+    return lock.request(async () => {
+      await this.adoptStoredSession();
+      // Cooldown is checked *after* adopting storage: a token rotated by a
+      // sibling tab must not be blocked by a failure on the stale one.
+      this.throwIfCoolingDown(this.session?.refreshToken);
+      try {
+        return await this.doRefresh(true);
+      } catch (err) {
+        if (err instanceof MichelangeloAuthError && err.causeCode === "token_failed") {
+          // Retry only when another tab actually persisted a newer pair.
+          // Retrying with the same consumed token would just hammer /token.
+          if (await this.adoptStoredSession()) return this.doRefresh(true);
+        }
+        throw err;
+      }
+    });
+  }
+
+  /**
+   * @param awaitPersist Wait for the storage write before resolving — used
+   * inside the cross-tab lock so another tab never reads a stale token.
+   */
+  private async doRefresh(awaitPersist: boolean): Promise<Session> {
     const refreshToken = this.session?.refreshToken;
     if (!refreshToken) {
       throw new MichelangeloAuthError("refresh: no refresh_token in memory", "missing_refresh_token");
@@ -338,11 +607,15 @@ export class AuthManager {
     });
     if (this.clientId) params.set("client_id", this.clientId);
     const token = await this.tokenRequest(params);
-    return this.setSession({
+    const previous = this.session;
+    const next = this.applySession({
       access_token: token.access_token,
       refresh_token: token.refresh_token ?? refreshToken,
       expires_in: token.expires_in,
     });
+    if (awaitPersist) await this.saveToStorageNow(next);
+    else this.persistIfChanged(previous, next);
+    return next;
   }
 
   // --- internals ---------------------------------------------------------------
@@ -385,6 +658,23 @@ export class AuthManager {
     }
     return data;
   }
+}
+
+function toPersistedSession(session: Session): PersistedSession {
+  return {
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    expiresAt: session.expiresAt,
+    clientId: session.clientId,
+  };
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<void> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as PromiseLike<void>).then === "function"
+  );
 }
 
 async function safeBodyText(res: Response): Promise<string> {

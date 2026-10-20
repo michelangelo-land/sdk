@@ -3,6 +3,7 @@ import { DEFAULT_API_BASE_URL } from "./config.js";
 import { MichelangeloApiError, MichelangeloAuthError } from "./errors.js";
 import { defaultFetch } from "./http.js";
 import type { PkceCrypto } from "./pkce.js";
+import type { SessionLock, SessionStorage } from "./storage.js";
 import type {
   AttachmentsManifest,
   AvatarUploadResponse,
@@ -102,6 +103,16 @@ export interface MichelangeloClientOptions {
   /** PKCE backend forwarded to `auth` — inject the expo-crypto adapter on Hermes. */
   pkceCrypto?: PkceCrypto;
   /**
+   * Opt-in session persistence (SecureStore, localStorage, …). Without it
+   * tokens stay in memory. Forwarded to `auth`; never imported by the SDK.
+   */
+  storage?: SessionStorage;
+  /**
+   * Opt-in cross-tab mutex (e.g. Web Locks API) forwarded to `auth` —
+   * serializes refresh rotations and adopts the newest stored token.
+   */
+  lock?: SessionLock;
+  /**
    * Refresh the access token and retry once when a call fails with 401
    * (default true). Requires a refresh token in memory; when the refresh
    * fails the original 401 surfaces. The session is dropped (back to
@@ -152,6 +163,8 @@ export class MichelangeloClient {
       clientId: options.clientId,
       fetchFn: this.fetchFn,
       pkceCrypto: options.pkceCrypto,
+      storage: options.storage,
+      lock: options.lock,
     });
   }
 
@@ -781,6 +794,15 @@ export class MichelangeloClient {
   /** `GET /integrations/supabase/connection` — connection state (safe columns). */
   getSupabaseConnection(): Promise<SupabaseConnection> {
     return this.request<SupabaseConnection>("/integrations/supabase/connection");
+  }
+
+  /**
+   * `DELETE /integrations/supabase/connection` — disconnect the caller's
+   * Supabase account (drops the stored OAuth tokens). Resolves void on
+   * HTTP 204.
+   */
+  async disconnectSupabaseConnection(): Promise<void> {
+    await this.request<void>("/integrations/supabase/connection", { method: "DELETE" });
   }
 
   /**

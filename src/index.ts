@@ -1,5 +1,5 @@
 export { AuthManager } from "./auth.js";
-export type { BeginLoginInput, BeginLoginResult, ExchangeCodeInput, AuthChangeEvent, AuthChangeListener, AuthState } from "./auth.js";
+export type { AuthManagerOptions, BeginLoginInput, BeginLoginResult, ExchangeCodeInput, AuthChangeEvent, AuthChangeListener, AuthState } from "./auth.js";
 export { MichelangeloClient } from "./client.js";
 export type { MichelangeloClientOptions, RequestOptions } from "./client.js";
 export {
@@ -19,8 +19,14 @@ export {
   JOB_ATTACHMENT_ALLOWED_MIMES,
   JOB_ATTACHMENT_MAX_BYTES,
   JOB_ATTACHMENT_MAX_COUNT,
+  normalizeGithubInstallation,
+  normalizeGithubUser,
+  normalizeSupabaseConnection,
+  normalizeSupabaseLink,
+  normalizeSupabaseProject,
 } from "./types.js";
 export type { PkceCrypto } from "./pkce.js";
+export type { PersistedSession, SessionLock, SessionStorage } from "./storage.js";
 export type {
   ApiErrorBody,
   AttachmentsManifest,
@@ -86,6 +92,11 @@ export type {
   Notification,
   NotificationSender,
   NotificationsPage,
+  NormalizedGithubInstallation,
+  NormalizedGithubUser,
+  NormalizedSupabaseConnection,
+  NormalizedSupabaseLink,
+  NormalizedSupabaseProject,
   PreviewError,
   PreviewErrorsPage,
   Project,

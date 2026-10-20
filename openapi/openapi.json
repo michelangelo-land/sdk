@@ -584,7 +584,7 @@
         ],
         "operationId": "getJob",
         "summary": "Get job status",
-        "description": "Polling endpoint. Clients should poll with backoff (suggested: 2s → 30s max). A future version may offer realtime delivery (SSE / Realtime) without changing this contract.\n",
+        "description": "Polling endpoint. Clients should poll with backoff (suggested: 2s → 30s max). Returns the job row plus `estimated_duration_seconds` (p50 of recent succeeded prompt jobs, fallback 120s) and `queue_position` (0 when running, 1 when queued behind the single-active slot). A future version may offer realtime delivery (SSE / Realtime) without changing this contract.\n",
         "security": [
           {
             "oauth2": []
@@ -601,6 +601,42 @@
         "responses": {
           "200": {
             "description": "Job snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/jobs/active": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "getActiveJob",
+        "summary": "Get the caller's active job (queued/running)",
+        "description": "Returns the caller's single active job (`queued` or `running`, most recently created first) or 404 `job_not_found` when no job is active. Same row shape as `GET /jobs/{jobId}` (including ETA fields). Use it on cold start or after a 409 `job_already_active` (whose `details` already carries `job_id`) instead of showing a generic \"go to Library\".\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active job snapshot",
             "content": {
               "application/json": {
                 "schema": {
@@ -725,7 +761,7 @@
         ],
         "operationId": "listProjects",
         "summary": "List projects of the authenticated user",
-        "description": "Returns the authenticated user's own projects by default (`visibility=mine`). Pass `visibility=all` to also include public/shared community projects. RLS of the underlying backend applies on top: users can never see other people's private rows.\n",
+        "description": "Returns the authenticated user's own projects by default (`visibility=mine`). Pass `visibility=all` to also include public/shared community projects. Pass `owner=<userId>` (uuid) to list one user's public projects without downloading the whole feed (RLS still applies: only shared rows of other users are visible). RLS of the underlying backend applies on top: users can never see other people's private rows.\n",
         "security": [
           {
             "oauth2": []
@@ -764,6 +800,15 @@
                 "all"
               ],
               "default": "mine"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "description": "Filter by owner id (uuid). When set, returns that user's shared projects (plus your own when owner is you). Replaces client-side feed filtering for foreign profiles.\n",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
             }
           },
           {
@@ -1731,7 +1776,7 @@
         ],
         "operationId": "saveGithubInstallation",
         "summary": "Store installation after OAuth (upsert github_installations)",
-        "description": "Replaces `storeInstallation` in `use-github-mutations.ts` (which no longer writes to the DB — it only returns `{installation_id,profile}`). Upserts `{id,user_id,ghu,login,avatar,name}` on conflict `id`; `user_id` is always forced from the JWT (client value ignored). `ghu` (user OAuth token) is write-only — never returned. The webhook edge only refreshes rows, so without this call installations would never exist.\n",
+        "description": "Upserts `{id,user_id,ghu,login,avatar,name}` on conflict `id`; `user_id` is always forced from the JWT (client value ignored). `login/avatar/name` are optional — when omitted they are fetched server-side via `ghu`, so clients never call `api.github.com`. `ghu` (user OAuth token) is write-only — never returned. The webhook edge only refreshes rows, so without this call installations would never exist.\n",
         "security": [
           {
             "oauth2": []
@@ -1757,6 +1802,116 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GithubInstallation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/github/user": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "getGithubUser",
+        "summary": "GitHub profile via the stored token (no client fetch)",
+        "description": "Server-side proxy of `GET https://api.github.com/user` using the caller's stored `ghu` OAuth token (most recently created installation). Returns `{login,avatar_url,name}` — clients stop calling `api.github.com` directly and stop shipping `EXPO_PUBLIC_GITHUB_CLIENT_ID` for profile reads (the client id is still needed for the OAuth authorize URL itself, which is public by design). 404 `not_connected` when the user has no stored token.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GitHub profile of the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubUser"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "GitHub account not connected — same Error shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/github/discover": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "discoverGithubInstallations",
+        "summary": "List GitHub App installations for a fresh OAuth token",
+        "description": "Proxies `GET https://api.github.com/user/installations` with a caller-provided `ghu` token (pre-store discovery: the \"already installed\" fallback where no installation row exists yet). Returns `{installations:[{id,app_slug}]}` trimmed to the fields the picker needs. The token is used once and never stored — persist via `POST /github/installations` afterwards.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ghu"
+                ],
+                "properties": {
+                  "ghu": {
+                    "type": "string",
+                    "description": "Fresh GitHub user OAuth token (used once, never stored)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Installations visible to the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "installations"
+                  ],
+                  "properties": {
+                    "installations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2319,6 +2474,42 @@
         }
       }
     },
+    "/wallets/me/summary": {
+      "get": {
+        "tags": [
+          "wallets"
+        ],
+        "operationId": "getWalletSummary",
+        "summary": "Balance plus lifetime granted/used totals (one call)",
+        "description": "Aggregated wallet view so clients never paginate the ledger for a progress bar: `balance` (same as `GET /wallets/me`), `total_granted` (sum of positive deltas: topup+bonus+refund+migration+adjustment), `total_used` (`total_granted - balance`), plus the same `balance_eur`/`display_balance` formatting. Computed server-side (single call); the ledger stays available via `GET /wallets/me/transactions` for line items.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregated wallet summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/usage/summary": {
       "get": {
         "tags": [
@@ -2493,7 +2684,7 @@
         ],
         "operationId": "listNotifications",
         "summary": "List notifications (cursor, mirrors push-notifications.tsx)",
-        "description": "Selects `notifications` for the caller ordered by `created_at` desc (limit 50 max client-side; API default 20). Includes `sender{username,avatar_url}` expansion.\n",
+        "description": "Selects `notifications` for the caller ordered by `created_at` desc (limit 50 max client-side; API default 20). Each row carries `sender_id` plus the `sender{username,avatar_url}` expansion, and `project_icon_url` (icon of `entity_id` when `entity_type=project`, else null) so clients never do cache lookups for sender or icon.\n",
         "security": [
           {
             "oauth2": []
@@ -3313,6 +3504,65 @@
           }
         }
       },
+      "WalletSummary": {
+        "type": "object",
+        "required": [
+          "balance",
+          "currency",
+          "balance_eur",
+          "display_balance",
+          "total_granted",
+          "total_used",
+          "total_granted_eur",
+          "total_used_eur",
+          "display_granted",
+          "display_used"
+        ],
+        "description": "Aggregated wallet view (one call replaces ledger pagination for the budget bar). `total_granted` = sum of positive deltas (topup+bonus+refund+migration+adjustment); `total_used` = `total_granted - balance`. All money in integer EUR-cent credits; clients render `display_*` verbatim.\n",
+        "properties": {
+          "balance": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "eur"
+            ]
+          },
+          "balance_eur": {
+            "type": "string",
+            "example": "10.10"
+          },
+          "display_balance": {
+            "type": "string",
+            "example": "10,10 €"
+          },
+          "total_granted": {
+            "type": "integer",
+            "description": "Lifetime granted credits (sum of positive ledger deltas)"
+          },
+          "total_used": {
+            "type": "integer",
+            "description": "Lifetime consumed credits (total_granted - balance, can exceed granted in overdraft)"
+          },
+          "total_granted_eur": {
+            "type": "string",
+            "example": "50.00"
+          },
+          "total_used_eur": {
+            "type": "string",
+            "example": "39.90"
+          },
+          "display_granted": {
+            "type": "string",
+            "example": "50,00 €"
+          },
+          "display_used": {
+            "type": "string",
+            "example": "39,90 €"
+          }
+        }
+      },
       "WalletTransaction": {
         "type": "object",
         "properties": {
@@ -3478,12 +3728,28 @@
             "type": "string",
             "format": "date-time"
           },
+          "sender_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Sender profile id (null for system notifications)"
+          },
           "sender": {
             "type": [
               "object",
               "null"
             ],
             "additionalProperties": true
+          },
+          "project_icon_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri",
+            "description": "Icon of entity_id when entity_type=project, else null"
           }
         }
       },
@@ -3977,6 +4243,31 @@
           }
         }
       },
+      "GithubUser": {
+        "type": "object",
+        "required": [
+          "login"
+        ],
+        "description": "GitHub profile proxied server-side via the stored ghu token",
+        "properties": {
+          "login": {
+            "type": "string"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "GithubRepository": {
         "type": "object",
         "properties": {
@@ -4059,7 +4350,8 @@
             "description": "User OAuth token (write-only, stored server-side, never returned)"
           },
           "login": {
-            "type": "string"
+            "type": "string",
+            "description": "GitHub login (optional — fetched server-side via ghu when omitted)"
           },
           "avatar": {
             "type": [
@@ -4179,6 +4471,22 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "estimated_duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "p50 of recent succeeded prompt jobs (fallback 120s) — indicative only, never an SLA",
+            "example": 120
+          },
+          "queue_position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "0 when running/first in queue, 1 when queued behind the single-active slot",
+            "example": 0
           }
         }
       },

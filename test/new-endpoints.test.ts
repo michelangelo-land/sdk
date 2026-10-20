@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { MichelangeloClient } from "../src/client.js";
+import {
+  normalizeGithubInstallation,
+  normalizeGithubUser,
+  normalizeSupabaseConnection,
+  normalizeSupabaseLink,
+  normalizeSupabaseProject,
+} from "../src/types.js";
 
 function stubFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): typeof fetch {
   return ((url: unknown, init?: unknown) => handler(url as string, init as RequestInit)) as typeof fetch;
@@ -572,5 +579,49 @@ describe("live activity tokens", () => {
     // object form as well
     await client.removeLiveActivityUpdateToken({ job_id: jobId });
     assert.ok(deleteUrl.endsWith(`/live-activity/update-tokens/${jobId}`), deleteUrl);
+  });
+});
+
+describe("supabase disconnect + normalized view models", () => {
+  it("disconnectSupabaseConnection DELETEs /integrations/supabase/connection (204 → void)", async () => {
+    let seen = "";
+    const fetchFn = stubFetch((url, init) => {
+      seen = String(url);
+      assert.equal(init?.method, "DELETE");
+      return new Response(null, { status: 204 });
+    });
+    assert.equal(await authed(fetchFn).disconnectSupabaseConnection(), undefined);
+    assert.ok(seen.endsWith("/v1/integrations/supabase/connection"), seen);
+  });
+
+  it("normalizes raw nullable rows into required view models", () => {
+    assert.deepEqual(normalizeGithubInstallation({ login: null }, 7), {
+      id: 7,
+      login: "",
+      avatar: null,
+      name: null,
+    });
+    assert.deepEqual(normalizeGithubUser({ login: "octo" }), {
+      login: "octo",
+      avatar_url: null,
+      name: null,
+    });
+    assert.deepEqual(normalizeSupabaseConnection({ connected: true }), {
+      connected: true,
+      supabase_user_id: null,
+      supabase_username: null,
+    });
+    assert.deepEqual(normalizeSupabaseProject({ ref: "abc" }), {
+      ref: "abc",
+      name: "",
+      region: "",
+      created_at: "",
+      linked_project_id: null,
+    });
+    assert.deepEqual(normalizeSupabaseLink({ supabase_project_ref: "abc" }, 12), {
+      project_id: 12,
+      supabase_project_ref: "abc",
+      supabase_project_name: "",
+    });
   });
 });

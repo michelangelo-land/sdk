@@ -3,14 +3,16 @@
 Official Michelangelo SDK (TypeScript, zero runtime dependencies).
 
 Meeting point with the API: **the swagger** — [`GET /v1/openapi.json`](https://api.michelangelo.land/v1/openapi.json) (vendored at `openapi/openapi.json`).
-`src/config.ts`, `src/types.ts` and `src/client.ts` track it; `npm run contract` fails if they drift.
+`src/config.ts`, `src/types.ts` and `src/client.ts` track it; `npm run contract` fails if the SDK defaults, the vendored file or the live document drift.
+Use `npm run contract -- --offline` (or `CONTRACT_OFFLINE=1`) to validate only the vendored file without network access.
 Interactive reference: [`GET /v1/docs`](https://api.michelangelo.land/v1/docs) (Scalar).
 
 ## Dynamic auth
 
 The SDK is born **anonymous** and logs in via OAuth 2.1 + PKCE against
-`auth.michelangelo.land`. Tokens live **only in memory** and are applied to
-every subsequent call automatically.
+`auth.michelangelo.land`. Tokens live **in memory by default** — persistence is
+opt-in via an injected storage adapter — and are applied to every subsequent
+call automatically.
 
 ```ts
 import { MichelangeloClient } from "@michelangelo-land/sdk";
@@ -45,6 +47,66 @@ await loginWithLoopback(client); // ephemeral 127.0.0.1 server + browser + excha
 ```bash
 npm run example:node-login
 ```
+
+## Session persistence (opt-in)
+
+By default tokens never leave memory. Pass `storage` (and optionally `lock`)
+to persist rotated tokens and restore them at cold start. The SDK does **not**
+import `expo`, `expo-secure-store` or any storage library — you inject a small
+adapter:
+
+```ts
+import * as SecureStore from "expo-secure-store";
+import { MichelangeloClient, type SessionLock, type SessionStorage } from "@michelangelo-land/sdk";
+
+const KEY = "michelangelo-session";
+
+const storage: SessionStorage = {
+  load: async () => {
+    const raw = await SecureStore.getItemAsync(KEY);
+    return raw ? JSON.parse(raw) : null;
+  },
+  save: (session) => SecureStore.setItemAsync(KEY, JSON.stringify(session)),
+  clear: () => SecureStore.deleteItemAsync(KEY),
+};
+
+const client = new MichelangeloClient({
+  clientId: "…",
+  storage,
+  // Optional on React Native (single JS context): a no-op or mutex is fine.
+  lock: { request: (callback) => callback() },
+});
+
+// Cold start: adopt the persisted session (emits SIGNED_IN when anonymous).
+await client.auth.restoreSession();
+```
+
+On web, use `localStorage` and the real Web Locks API for cross-tab safety:
+
+```ts
+const storage: SessionStorage = {
+  load: () => JSON.parse(localStorage.getItem(KEY) ?? "null"),
+  save: (s) => localStorage.setItem(KEY, JSON.stringify(s)),
+  clear: () => localStorage.removeItem(KEY),
+};
+
+const lock: SessionLock = {
+  request: (callback) => navigator.locks.request("michelangelo-session", callback),
+};
+
+const client = new MichelangeloClient({ storage, lock });
+```
+
+- `setSession()` / `exchangeCode()` persist changed tokens (fire-and-forget —
+  storage errors never fail auth).
+- `logout()` clears the store (best-effort).
+- `restoreSession()` reads the store, adopts the session and returns it;
+  it never re-saves the same tokens (no storage-event loops).
+- With `lock`, `refresh()` runs read → adopt newer token → rotate → save
+  inside one exclusive section, retrying once on `token_failed` when another
+  tab won the rotation. Without `lock` it keeps the in-process single-flight
+  behavior.
+- `getSession()` stays memory-only and unchanged.
 
 ## Endpoints (swagger → SDK)
 
@@ -88,6 +150,7 @@ npm run example:node-login
 | integrations | `linkSupabaseProject` `POST /integrations/supabase/links` | `client.linkSupabaseProject({ project_id, supabase_ref })` | Bearer required |
 | integrations | `unlinkSupabaseProject` `DELETE /integrations/supabase/links/{projectId}` | `client.unlinkSupabaseProject(project_id)` → void (204) | Bearer required |
 | integrations | `getSupabaseConnection` `GET /integrations/supabase/connection` | `client.getSupabaseConnection()` | Bearer required |
+| integrations | `disconnectSupabaseConnection` `DELETE /integrations/supabase/connection` | `client.disconnectSupabaseConnection()` → void (204) | Bearer required |
 | wallets | `getMyWallet` `GET /wallets/me` | `client.getMyWallet()` | Bearer required |
 | wallets | `getWalletSummary` `GET /wallets/me/summary` | `client.getWalletSummary()` / `client.getCreditBalance()` → `{ balance, total_granted, total_used, display_* }` (one call, no ledger pagination) | Bearer required |
 | wallets | `listMyTransactions` `GET /wallets/me/transactions` | `client.listMyTransactions()` / `client.listAllMyTransactions()` | Bearer required |
@@ -107,6 +170,37 @@ npm run example:node-login
 | live-activity | `removeLiveActivityUpdateToken` `DELETE /live-activity/update-tokens/{jobId}` | `client.removeLiveActivityUpdateToken(job_id)` → void (204) | Bearer required |
 | billing | `createBillingCheckout` `POST /billing/checkouts` | `client.createBillingCheckout()` → open `checkout_url` | Bearer required |
 
+### Raw vs Normalized types
+
+Raw types (`GithubInstallation`, `GithubUser`, `SupabaseConnection`,
+`SupabaseProject`, `SupabaseProjectLink`) mirror the OpenAPI exactly: fields
+are optional/nullable because that is what the wire returns. If your UI wants
+required, non-null fields, map once with the exported `Normalized*` types and
+pure `normalize*` helpers:
+
+```ts
+import { normalizeGithubInstallation, normalizeSupabaseProject } from "@michelangelo-land/sdk";
+
+const installations = page.data.map((raw) => normalizeGithubInstallation(raw, 0));
+const projects = res.projects.map(normalizeSupabaseProject);
+```
+
+`normalizeSupabaseLink(raw, fallbackProjectId)` uses the fallback only when the
+raw row omits `project_id`.
+
+> Migration notes (0.15.0): opt-in session persistence — `MichelangeloClient`
+> and `AuthManager` accept `storage` + `lock`, and `auth.restoreSession()`
+> adopts a stored session at cold start. New
+> `disconnectSupabaseConnection()` (`DELETE /integrations/supabase/connection`,
+> 204). New `NormalizedGithubInstallation` / `NormalizedGithubUser` /
+> `NormalizedSupabaseConnection` / `NormalizedSupabaseProject` /
+> `NormalizedSupabaseLink` view-model types (+ `normalize*` helpers) for
+> consumers that want required fields; raw `Github*` / `Supabase*` types stay
+> aligned with the OpenAPI (optional/nullable). Vendored `openapi/openapi.json`
+> re-synced (`/jobs/active`, `/github/user`, `/github/discover`,
+> `/wallets/me/summary`); `contract-check` now validates the vendored file and
+> supports offline mode.
+>
 > Migration notes (0.14.0): new `GET /jobs/active` (`getActiveJob()` —
 > cold start / after 409 `job_already_active`, whose id is also on
 > `err.activeJobId()`), `GET /wallets/me/summary` (`getWalletSummary()` /
@@ -285,11 +379,47 @@ import `@michelangelo-land/sdk/node-loopback` in app bundles — it needs
 `node:http` and is excluded from the Metro graph as long as it stays
 unimported (the `react-native` export condition maps the core entry only).
 
+### OAuth browser flow with `expo-auth-session`
+
+The SDK gives you `beginLogin()` and `exchangeCode()`; there is **no**
+`completeLogin()` helper. Opening the browser, handling the redirect, parsing
+`?code=…`/`?state=…` and popup/cross-window behavior are the app's
+responsibility (the SDK has no Expo dependency):
+
+```ts
+import * as AuthSession from "expo-auth-session";
+import { MichelangeloClient } from "@michelangelo-land/sdk";
+
+const client = new MichelangeloClient({ clientId, pkceCrypto });
+
+const { url, codeVerifier, state } = await client.auth.beginLogin({ redirectUri });
+const result = await AuthSession.openAuthSessionAsync(url, redirectUri);
+
+if (result.type === "success") {
+  const params = new URL(result.url).searchParams;
+  if (params.get("state") !== state) throw new Error("OAuth state mismatch");
+  await client.auth.exchangeCode({
+    code: params.get("code")!,
+    codeVerifier,
+    redirectUri,
+  });
+}
+```
+
+Persist `codeVerifier`/`state` if the app can be killed while the browser is
+open; `exchangeCode()` then stores (and, with `storage`, persists) the session.
+
 ## Scripts
 
 - `npm run sync:openapi` — vendor the live swagger to `openapi/openapi.json`
-- `npm run contract` — fail if SDK defaults drift from the live swagger (run in CI)
+- `npm run contract` — fail if the SDK defaults or the vendored file drift from EXPECTED/live (run in CI, needs network)
+- `npm run contract -- --offline` (or `CONTRACT_OFFLINE=1`) — validate only `openapi/openapi.json` against EXPECTED without network (CI sandboxes); pending-deploy operations warn instead of failing
 - `npm run type-check` / `npm run build` / `npm test`
+
+> Deploy note: `disconnectSupabaseConnection` (`DELETE
+> /integrations/supabase/connection`) is in EXPECTED as pending-deploy. The
+> offline check passes today; once the API ships it, run `npm run sync:openapi`
+> and re-run the live `npm run contract` (it fails until then, by design).
 
 ## Publishing (trusted publishing, no npm token)
 

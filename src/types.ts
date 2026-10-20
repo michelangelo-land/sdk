@@ -257,11 +257,13 @@ export interface ListAllProjectsOptions extends Omit<ListProjectsOptions, "curso
 }
 
 export interface CreateProjectRequest {
+  /** 1–30 chars (validated server-side; the SDK does not validate locally). */
   name: string;
   shared?: boolean;
 }
 
 export interface UpdateProjectRequest {
+  /** 1–30 chars when sent (validated server-side; no local validation). */
   name?: string;
   shared?: boolean;
 }
@@ -565,6 +567,97 @@ export interface SupabaseConnection {
   connected: boolean;
   supabase_user_id?: string | null;
   supabase_username?: string | null;
+}
+
+// --- Normalized view models -------------------------------------------------
+// Raw types above mirror the OpenAPI exactly: fields are optional/nullable
+// because that is what the wire returns. The `Normalized*` types are for
+// consumers that want required, non-null fields in the UI layer. Helpers are
+// pure and synchronous — apply them once where you read the raw response.
+
+export interface NormalizedGithubInstallation {
+  id: number;
+  login: string;
+  avatar: string | null;
+  name: string | null;
+}
+
+export interface NormalizedGithubUser {
+  login: string;
+  avatar_url: string | null;
+  name: string | null;
+}
+
+export interface NormalizedSupabaseConnection {
+  connected: boolean;
+  supabase_user_id: string | null;
+  supabase_username: string | null;
+}
+
+export interface NormalizedSupabaseProject {
+  ref: string;
+  name: string;
+  region: string;
+  created_at: string;
+  linked_project_id: number | null;
+}
+
+export interface NormalizedSupabaseLink {
+  project_id: number;
+  supabase_project_ref: string;
+  supabase_project_name: string;
+  api_url?: string;
+}
+
+/** `fallbackId` is used when the raw row omits `id` (legacy rows). */
+export function normalizeGithubInstallation(
+  raw: GithubInstallation,
+  fallbackId: number,
+): NormalizedGithubInstallation {
+  return {
+    id: raw.id ?? fallbackId,
+    login: raw.login ?? "",
+    avatar: raw.avatar ?? null,
+    name: raw.name ?? null,
+  };
+}
+
+export function normalizeGithubUser(raw: GithubUser): NormalizedGithubUser {
+  return {
+    login: raw.login,
+    avatar_url: raw.avatar_url ?? null,
+    name: raw.name ?? null,
+  };
+}
+
+export function normalizeSupabaseConnection(raw: SupabaseConnection): NormalizedSupabaseConnection {
+  return {
+    connected: raw.connected,
+    supabase_user_id: raw.supabase_user_id ?? null,
+    supabase_username: raw.supabase_username ?? null,
+  };
+}
+
+export function normalizeSupabaseProject(raw: SupabaseProject): NormalizedSupabaseProject {
+  return {
+    ref: raw.ref,
+    name: raw.name ?? "",
+    region: raw.region ?? "",
+    created_at: raw.created_at ?? "",
+    linked_project_id: raw.linked_project_id ?? null,
+  };
+}
+
+export function normalizeSupabaseLink(
+  raw: SupabaseProjectLink,
+  fallbackProjectId: number,
+): NormalizedSupabaseLink {
+  return {
+    project_id: raw.project_id ?? fallbackProjectId,
+    supabase_project_ref: raw.supabase_project_ref ?? "",
+    supabase_project_name: raw.supabase_project_name ?? "",
+    ...(raw.api_url !== undefined ? { api_url: raw.api_url } : {}),
+  };
 }
 
 // --- billing → `createBillingCheckout`, schemas `CreateBillingCheckout*` ---
