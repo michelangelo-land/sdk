@@ -1815,6 +1815,46 @@
         }
       }
     },
+    "/github/installations/{installationId}": {
+      "delete": {
+        "tags": [
+          "github"
+        ],
+        "operationId": "disconnectGithubInstallation",
+        "summary": "Disconnect a GitHub account from Michelangelo",
+        "description": "Deletes the caller's `github_installations` row and, via FK cascade, every `github_repositories` link backed by it. The stored `ghu` OAuth token is dropped with the row. This does **not** uninstall the GitHub App from GitHub: uninstalling requires an App JWT and could affect an entire organization, so the installation stays until the user removes it from GitHub settings. Idempotent and ownership-safe: 204 even when the id does not exist or belongs to another user.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "installationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "GitHub account disconnected (idempotent)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
     "/github/user": {
       "get": {
         "tags": [

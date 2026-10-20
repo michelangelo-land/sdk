@@ -458,6 +458,17 @@ describe("github + supabase unlink", () => {
     assert.ok(seen.endsWith("/v1/github/repositories/12"), seen);
   });
 
+  it("disconnectGithubInstallation DELETEs /github/installations/{id} and resolves void on 204", async () => {
+    let seen = "";
+    const fetchFn = stubFetch((url, init) => {
+      seen = String(url);
+      assert.equal(init?.method, "DELETE");
+      return new Response(null, { status: 204 });
+    });
+    assert.equal(await authed(fetchFn).disconnectGithubInstallation(11), undefined);
+    assert.ok(seen.endsWith("/v1/github/installations/11"), seen);
+  });
+
   it("unlinkSupabaseProject DELETEs /integrations/supabase/links/{id} and resolves void on 204", async () => {
     let seen = "";
     const fetchFn = stubFetch((url, init) => {

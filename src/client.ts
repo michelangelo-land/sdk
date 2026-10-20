@@ -689,6 +689,19 @@ export class MichelangeloClient {
   }
 
   /**
+   * `DELETE /github/installations/{installationId}` — disconnect a GitHub
+   * account from Michelangelo only (drops the stored token and repo links).
+   * The GitHub App installation stays on GitHub. Idempotent; resolves void
+   * on HTTP 204.
+   */
+  async disconnectGithubInstallation(installationId: number): Promise<void> {
+    await this.request<void>(
+      `/github/installations/${encodeURIComponent(String(installationId))}`,
+      { method: "DELETE" },
+    );
+  }
+
+  /**
    * `GET /github/user` — GitHub profile (`login,avatar_url,name`) proxied
    * server-side via the stored `ghu` token. Replaces direct
    * `fetch("https://api.github.com/user")` in clients. 404 `not_connected`

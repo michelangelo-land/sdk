@@ -143,6 +143,7 @@ const client = new MichelangeloClient({ storage, lock });
 | github | `getGithubUser` `GET /github/user` | `client.getGithubUser()` → `{ login, avatar_url, name }` (server-side via stored token; 404 `not_connected` when unlinked) | Bearer required |
 | github | `discoverGithubInstallations` `POST /github/discover` | `client.discoverGithubInstallations({ ghu })` → `{ installations }` (fresh token, used once, never stored — pre-store picker) | Bearer required |
 | github | `listGithubInstallations` / `saveGithubInstallation` | `client.listGithubInstallations()` / `client.saveGithubInstallation({ id, ghu })` (`login/avatar/name` optional — fetched server-side when omitted) | Bearer required |
+| github | `disconnectGithubInstallation` `DELETE /github/installations/{installationId}` | `client.disconnectGithubInstallation(installation_id)` → void (204; local disconnect only, GitHub App stays installed) | Bearer required |
 | github | `listGithubRepositories` / `linkGithubRepository` | `client.listGithubRepositories()` / `client.linkGithubRepository()` | Bearer required |
 | github | `unlinkGithubRepository` `DELETE /github/repositories/{projectId}` | `client.unlinkGithubRepository(project_id)` → void (204) | Bearer required |
 | integrations | `createSupabaseAuthorization` `POST /integrations/supabase/authorizations` | `client.createSupabaseAuthorization({ code_challenge })` → open `authorize_url` | Bearer required |
@@ -188,6 +189,11 @@ const projects = res.projects.map(normalizeSupabaseProject);
 `normalizeSupabaseLink(raw, fallbackProjectId)` uses the fallback only when the
 raw row omits `project_id`.
 
+> Migration notes (0.16.0): new `disconnectGithubInstallation(installation_id)`
+> (`DELETE /github/installations/{installationId}`, 204) removes a GitHub
+> account from Michelangelo only — `ghu` and repo links are dropped, while the
+> GitHub App installation stays on GitHub.
+>
 > Migration notes (0.15.0): opt-in session persistence — `MichelangeloClient`
 > and `AuthManager` accept `storage` + `lock`, and `auth.restoreSession()`
 > adopts a stored session at cold start. New
@@ -416,9 +422,10 @@ open; `exchangeCode()` then stores (and, with `storage`, persists) the session.
 - `npm run contract -- --offline` (or `CONTRACT_OFFLINE=1`) — validate only `openapi/openapi.json` against EXPECTED without network (CI sandboxes); pending-deploy operations warn instead of failing
 - `npm run type-check` / `npm run build` / `npm test`
 
-> Release note: `disconnectSupabaseConnection` (`DELETE
-> /integrations/supabase/connection`) shipped with API `c80606a`; the vendored
-> swagger was re-synced for 0.15.0 and the live contract check passes.
+> Release note: `disconnectGithubInstallation` (`DELETE
+> /github/installations/{installationId}`) shipped with the API deploy of
+> 2026-10-20; the vendored swagger was re-synced for 0.16.0 and the live
+> contract check passes.
 
 ## Publishing (trusted publishing, no npm token)
 
