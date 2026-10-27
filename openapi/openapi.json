@@ -761,7 +761,7 @@
         ],
         "operationId": "listProjects",
         "summary": "List projects of the authenticated user",
-        "description": "Returns the authenticated user's own projects by default (`visibility=mine`). Pass `visibility=all` to also include public/shared community projects. Pass `owner=<userId>` (uuid) to list one user's public projects without downloading the whole feed (RLS still applies: only shared rows of other users are visible). RLS of the underlying backend applies on top: users can never see other people's private rows.\n",
+        "description": "Returns the authenticated user's own projects by default (`visibility=mine`). Pass `visibility=all` for the public community feed: shared projects only, own included (a private project never appears, not even your own), with projects that have an active generation job (`queued`/`running`) omitted so an app is never shown while its preview is still being built. Pass `owner=<userId>` (uuid) to list one user's public projects without downloading the whole feed (RLS still applies: only shared rows of other users are visible). RLS of the underlying backend applies on top: users can never see other people's private rows.\n",
         "security": [
           {
             "oauth2": []
@@ -792,7 +792,7 @@
           {
             "name": "visibility",
             "in": "query",
-            "description": "`mine` (default): only the caller's own projects. `all`: own projects plus public/shared community projects.\n",
+            "description": "`mine` (default): only the caller's own projects. `all`: the community feed — shared projects only (own private ones excluded) minus any project with an active generation job.\n",
             "schema": {
               "type": "string",
               "enum": [

@@ -238,7 +238,11 @@ export interface ProjectPage {
 export interface ListProjectsOptions {
   limit?: number;
   cursor?: string;
-  /** `mine` (default): caller's own projects. `all`: plus public/shared. */
+  /**
+   * `mine` (default): the caller's own projects. `all`: the public community
+   * feed — shared projects only (own private ones excluded) with projects
+   * that have an active generation job omitted.
+   */
   visibility?: ProjectVisibility;
   /**
    * Filter by owner id (uuid) — one user's shared projects without

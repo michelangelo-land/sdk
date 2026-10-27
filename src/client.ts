@@ -471,10 +471,12 @@ export class MichelangeloClient {
 
   /**
    * `GET /projects` — page of projects (`mine` by default, `all` for the
-   * community view). `next_cursor` feeds the next call's `cursor`. Pass `q`
-   * for full-text search via RPC `match_project` (RLS still applies) — this
-   * replaces the removed `GET /explore/projects` endpoint. Pass `owner` to
-   * list one user's shared projects without downloading the feed.
+   * community feed: shared projects only, and projects with an active
+   * generation job left out until the job finishes). `next_cursor` feeds the
+   * next call's `cursor`. Pass `q` for full-text search via RPC
+   * `match_project` (RLS still applies) — this replaces the removed
+   * `GET /explore/projects` endpoint. Pass `owner` to list one user's shared
+   * projects without downloading the feed.
    */
   listProjects(options: ListProjectsOptions = {}): Promise<ProjectPage> {
     const params = new URLSearchParams();

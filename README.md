@@ -124,7 +124,7 @@ const client = new MichelangeloClient({ storage, lock });
 | jobs | `getJob` `GET /jobs/{jobId}` | `client.getJob()` / `client.waitForJob()` (retries transient network/502/429 with backoff; row carries `estimated_duration_seconds` + `queue_position`) | Bearer required |
 | jobs | `getActiveJob` `GET /jobs/active` | `client.getActiveJob()` → active row or 404 (cold start / after 409) | Bearer required |
 | jobs | `listPromptSuggestions` `GET /prompt-suggestions` | `client.listPromptSuggestions({ mode: "create", locale: "it", limit: 20 })` / `{ mode: "edit", shuffle: true, limit: 1 }` for dice | Bearer required |
-| projects | `listProjects` `GET /projects` | `client.listProjects({ visibility: "all", q, owner })` / `client.listAllProjects()` (`owner` = one user's shared projects, no feed download) | Bearer required |
+| projects | `listProjects` `GET /projects` | `client.listProjects({ visibility: "all", q, owner })` / `client.listAllProjects()` (`all` = shared community feed, active-generation projects omitted; `owner` = one user's shared projects, no feed download) | Bearer required |
 | projects | `createProject` `POST /projects` | `client.createProject({ name })` → 201 | Bearer required |
 | projects | `getProject` `GET /projects/{id}` | `client.getProject()` | Bearer required |
 | projects | `updateProject` `PATCH /projects/{id}` | `client.updateProject(id, { name, shared })` (icon is server-managed via `…/icon`) | Bearer required |
@@ -319,6 +319,8 @@ const author = project.author; // { username, avatar_url } | null
 const hero = await client.getPublicProfile(project.user_id!);
 
 // Community feed: every page, one array (`visibility: "all"` + `q` search).
+// `all` is shared projects only and skips anything still generating, so a
+// brand-new or in-edit app stays out of the feed until its job succeeds.
 const projects = await client.listAllProjects({ visibility: "all" });
 const feed = await client.listAllProjects({ visibility: "all", q: "timer" });
 
