@@ -3769,6 +3769,10 @@
           },
           "peak_hour": {
             "type": "integer"
+          },
+          "created_today": {
+            "type": "boolean",
+            "description": "True when the caller created at least one app today, in the timezone given to the endpoint. The Home daily banner uses it to show the done state instead of the countdown.\n"
           }
         }
       },

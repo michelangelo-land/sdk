@@ -816,6 +816,8 @@ export interface UsageInsights {
   best_month?: string;
   best_month_apps?: number;
   peak_hour?: number;
+  /** True when the caller created at least one app today, in `timezone`. */
+  created_today?: boolean;
 }
 
 export interface GetUsageInsightsOptions {
