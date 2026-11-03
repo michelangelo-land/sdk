@@ -61,6 +61,8 @@ import type {
   NotificationsPage,
   PreviewErrorsPage,
   ListPreviewErrorsOptions,
+  GetDailyPromptSuggestionOptions,
+  DailyPromptSuggestionResponse,
   ListPromptSuggestionsOptions,
   PromptSuggestionsPage,
   Project,
@@ -467,6 +469,27 @@ export class MichelangeloClient {
     if (options.category !== undefined) params.set("category", options.category);
     if (options.shuffle !== undefined) params.set("shuffle", String(options.shuffle));
     return this.request<PromptSuggestionsPage>(`/prompt-suggestions?${params.toString()}`);
+  }
+
+  /**
+   * `GET /prompt-suggestions/daily` — today's idea for the Home daily banner.
+   * One per user per local day: the server hashes the user id to a start
+   * offset, advances one position per local day and skips the ideas already
+   * sent as a prompt job, so the pick changes only at `expires_at`. Pass the
+   * device IANA `timezone` so `date` and `expires_at` match the user's
+   * midnight; clients never do midnight math. An unpersonalized idea still
+   * comes back when the history lookup fails, so the banner always renders.
+   */
+  getDailyPromptSuggestion(
+    options: GetDailyPromptSuggestionOptions = {},
+  ): Promise<DailyPromptSuggestionResponse> {
+    const params = new URLSearchParams();
+    if (options.timezone !== undefined) params.set("timezone", options.timezone);
+    if (options.locale !== undefined) params.set("locale", options.locale);
+    if (options.mode !== undefined) params.set("mode", options.mode);
+    return this.request<DailyPromptSuggestionResponse>(
+      `/prompt-suggestions/daily?${params.toString()}`,
+    );
   }
 
   /**

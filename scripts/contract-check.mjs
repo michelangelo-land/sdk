@@ -32,7 +32,8 @@ const EXPECTED = {
   operations: [
     "getHealth", "getOpenApiDocument", "getDocs", "getWhoami", "getMe",
     "updateMe", "deleteMe", "uploadMyAvatar", "getPublicProfile", "createJob", "uploadJobAttachments",
-    "getJob", "getActiveJob", "listPromptSuggestions", "listProjects", "createProject", "createBillingCheckout",
+    "getJob", "getActiveJob", "listPromptSuggestions", "getDailyPromptSuggestion", "listProjects", "createProject",
+    "createBillingCheckout",
     "handleBillingWebhook", "getProject", "updateProject", "deleteProject",
     "listProjectFiles", "saveProjectFiles", "generateProjectIcon", "pushProjectToGithub", "reshareProject",
     "listPreviewErrors", "drainPreviewErrors", "getProjectSupabaseLink",
@@ -50,7 +51,8 @@ const EXPECTED = {
   ],
   paths: [
     "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar", "/users/{userId}",
-    "/jobs", "/jobs/active", "/jobs/attachments", "/jobs/{jobId}", "/prompt-suggestions", "/projects",
+    "/jobs", "/jobs/active", "/jobs/attachments", "/jobs/{jobId}", "/prompt-suggestions",
+    "/prompt-suggestions/daily", "/projects",
     "/billing/checkouts", "/billing/webhooks", "/projects/{projectId}",
     "/projects/{projectId}/files", "/projects/{projectId}/icon",
     "/projects/{projectId}/pushes", "/projects/{projectId}/reshares", "/projects/{projectId}/preview-errors",
@@ -72,7 +74,8 @@ const EXPECTED = {
   implementedBySdk: [
     "getHealth", "getWhoami", "getMe", "updateMe", "deleteMe", "uploadMyAvatar",
     "getPublicProfile",
-    "createJob", "uploadJobAttachments", "getJob", "getActiveJob", "listPromptSuggestions", "listProjects", "createProject",
+    "createJob", "uploadJobAttachments", "getJob", "getActiveJob", "listPromptSuggestions",
+    "getDailyPromptSuggestion", "listProjects", "createProject",
     "getProject", "updateProject", "deleteProject", "listProjectFiles", "saveProjectFiles",
     "generateProjectIcon", "pushProjectToGithub", "reshareProject", "listPreviewErrors",
     "drainPreviewErrors", "getProjectSupabaseLink",

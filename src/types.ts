@@ -206,6 +206,31 @@ export interface ListPromptSuggestionsOptions {
   shuffle?: boolean;
 }
 
+/**
+ * One idea per user per local day (`getDailyPromptSuggestion`), for the Home
+ * daily banner. The server picks it deterministically and skips the ideas the
+ * user already sent, so it changes only at `expires_at`.
+ */
+export interface DailyPromptSuggestion extends PromptSuggestion {
+  /** Local calendar day of the pick in the requested timezone (`YYYY-MM-DD`). */
+  date: string;
+  /** UTC instant of the next local midnight — first call after this gets the next day's pick. */
+  expires_at: string;
+}
+
+export interface DailyPromptSuggestionResponse {
+  data: DailyPromptSuggestion;
+}
+
+export interface GetDailyPromptSuggestionOptions {
+  /** IANA timezone that defines the local day (default `UTC`). */
+  timezone?: string;
+  /** Language of the idea (default `en`). */
+  locale?: PromptSuggestionLocale;
+  /** `create` for a new app (default), `edit` to suggest a change to an existing one. */
+  mode?: PromptSuggestionMode;
+}
+
 // --- projects → `listProjects`/`createProject`/`getProject`/`updateProject`/`deleteProject`, schemas `Project`/`ProjectPage` ---
 
 export type ProjectVisibility = "mine" | "all";

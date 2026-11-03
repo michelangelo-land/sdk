@@ -525,6 +525,61 @@ describe("prompt suggestions", () => {
     const u = new URL(seenUrl);
     assert.equal(u.searchParams.get("mode"), "edit");
   });
+
+  it("getDailyPromptSuggestion encodes timezone/locale/mode and returns date + expiry", async () => {
+    let seenUrl = "";
+    const fetchFn = stubFetch((url) => {
+      seenUrl = String(url);
+      return json({
+        data: {
+          id: "expense-tracker-it",
+          prompt: "build an expense tracker",
+          mode: "create",
+          locale: "it",
+          category: "finance",
+          date: "2026-11-03",
+          expires_at: "2026-11-03T23:00:00Z",
+        },
+      });
+    });
+    const res = await authed(fetchFn).getDailyPromptSuggestion({
+      timezone: "Europe/Rome",
+      locale: "it",
+      mode: "create",
+    });
+    assert.equal(res.data.id, "expense-tracker-it");
+    assert.equal(res.data.date, "2026-11-03");
+    assert.equal(res.data.expires_at, "2026-11-03T23:00:00Z");
+    const u = new URL(seenUrl);
+    assert.ok(u.pathname.endsWith("/v1/prompt-suggestions/daily"), seenUrl);
+    assert.equal(u.searchParams.get("timezone"), "Europe/Rome");
+    assert.equal(u.searchParams.get("locale"), "it");
+    assert.equal(u.searchParams.get("mode"), "create");
+  });
+
+  it("getDailyPromptSuggestion sends no query when called with defaults", async () => {
+    let seenUrl = "";
+    const fetchFn = stubFetch((url) => {
+      seenUrl = String(url);
+      return json({
+        data: {
+          id: "timer-en",
+          prompt: "build a timer app",
+          mode: "create",
+          locale: "en",
+          category: "productivity",
+          date: "2026-11-03",
+          expires_at: "2026-11-04T00:00:00Z",
+        },
+      });
+    });
+    const res = await authed(fetchFn).getDailyPromptSuggestion();
+    assert.equal(res.data.locale, "en");
+    const u = new URL(seenUrl);
+    assert.equal(u.searchParams.get("timezone"), null);
+    assert.equal(u.searchParams.get("locale"), null);
+    assert.equal(u.searchParams.get("mode"), null);
+  });
 });
 
 describe("live activity tokens", () => {
