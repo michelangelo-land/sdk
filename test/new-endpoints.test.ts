@@ -582,52 +582,6 @@ describe("prompt suggestions", () => {
   });
 });
 
-describe("prompt ideas", () => {
-  it("createPromptIdea POSTs mode/locale/exclude and returns source", async () => {
-    let seen: { url: string; method?: string; body: unknown } | null = null;
-    const fetchFn = stubFetch((url, init) => {
-      seen = { url, method: init?.method, body: JSON.parse(String(init?.body)) };
-      return json({
-        data: {
-          id: "ai-fitness-1a2b3c",
-          prompt: "Track water intake with a daily goal ring",
-          mode: "create",
-          locale: "it",
-          category: "fitness",
-          source: "ai",
-        },
-      });
-    });
-    const res = await authed(fetchFn).createPromptIdea({
-      mode: "create",
-      locale: "it",
-      exclude: ["Una app per il budget familiare"],
-    });
-    assert.equal(res.data.source, "ai");
-    assert.equal(res.data.id, "ai-fitness-1a2b3c");
-    assert.ok(seen!.url.endsWith("/v1/prompt-ideas"), seen!.url);
-    assert.equal(seen!.method, "POST");
-    assert.deepEqual(seen!.body, {
-      mode: "create",
-      locale: "it",
-      exclude: ["Una app per il budget familiare"],
-    });
-  });
-
-  it("createPromptIdea sends an empty object when called with defaults", async () => {
-    let body: unknown = null;
-    const fetchFn = stubFetch((_url, init) => {
-      body = JSON.parse(String(init?.body));
-      return json({
-        data: { id: "timer-en", prompt: "build a timer app", mode: "create", locale: "en", category: "productivity", source: "curated" },
-      });
-    });
-    const res = await authed(fetchFn).createPromptIdea();
-    assert.equal(res.data.source, "curated");
-    assert.deepEqual(body, {});
-  });
-});
-
 describe("live activity tokens", () => {
   it("list/register/remove live-activity tokens", async () => {
     let deleteUrl = "";

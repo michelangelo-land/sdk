@@ -231,33 +231,6 @@ export interface GetDailyPromptSuggestionOptions {
   mode?: PromptSuggestionMode;
 }
 
-// --- prompt ideas → `createPromptIdea`, schemas `PromptIdeaRequest`/`PromptIdea` ---
-
-export interface CreatePromptIdeaRequest {
-  /** `create` suggests a new app (default), `edit` suggests a change to an existing one. */
-  mode?: PromptSuggestionMode;
-  /** Language of the idea (default `en`). */
-  locale?: PromptSuggestionLocale;
-  /**
-   * Ideas already shown in this session (max 20, 300 chars each). The model is
-   * told to avoid them and an idea that still matches one is discarded, so
-   * consecutive calls return different prompts.
-   */
-  exclude?: string[];
-}
-
-/** Where an idea came from: the model, or the curated list standing in for a failed generation. */
-export type PromptIdeaSource = "ai" | "curated";
-
-export interface PromptIdea extends PromptSuggestion {
-  /** `curated` means generation failed (rate limit, upstream, unusable output) — still a usable prompt. */
-  source: PromptIdeaSource;
-}
-
-export interface PromptIdeaResponse {
-  data: PromptIdea;
-}
-
 // --- projects → `listProjects`/`createProject`/`getProject`/`updateProject`/`deleteProject`, schemas `Project`/`ProjectPage` ---
 
 export type ProjectVisibility = "mine" | "all";

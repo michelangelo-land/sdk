@@ -32,7 +32,7 @@ const EXPECTED = {
   operations: [
     "getHealth", "getOpenApiDocument", "getDocs", "getWhoami", "getMe",
     "updateMe", "deleteMe", "uploadMyAvatar", "getPublicProfile", "createJob", "uploadJobAttachments",
-    "getJob", "getActiveJob", "listPromptSuggestions", "getDailyPromptSuggestion", "createPromptIdea",
+    "getJob", "getActiveJob", "listPromptSuggestions", "getDailyPromptSuggestion",
     "listProjects", "createProject",
     "createBillingCheckout",
     "handleBillingWebhook", "getProject", "updateProject", "deleteProject",
@@ -53,7 +53,7 @@ const EXPECTED = {
   paths: [
     "/health", "/openapi.json", "/docs", "/whoami", "/me", "/me/avatar", "/users/{userId}",
     "/jobs", "/jobs/active", "/jobs/attachments", "/jobs/{jobId}", "/prompt-suggestions",
-    "/prompt-suggestions/daily", "/prompt-ideas", "/projects",
+    "/prompt-suggestions/daily", "/projects",
     "/billing/checkouts", "/billing/webhooks", "/projects/{projectId}",
     "/projects/{projectId}/files", "/projects/{projectId}/icon",
     "/projects/{projectId}/pushes", "/projects/{projectId}/reshares", "/projects/{projectId}/preview-errors",
@@ -76,7 +76,7 @@ const EXPECTED = {
     "getHealth", "getWhoami", "getMe", "updateMe", "deleteMe", "uploadMyAvatar",
     "getPublicProfile",
     "createJob", "uploadJobAttachments", "getJob", "getActiveJob", "listPromptSuggestions",
-    "getDailyPromptSuggestion", "createPromptIdea", "listProjects", "createProject",
+    "getDailyPromptSuggestion", "listProjects", "createProject",
     "getProject", "updateProject", "deleteProject", "listProjectFiles", "saveProjectFiles",
     "generateProjectIcon", "pushProjectToGithub", "reshareProject", "listPreviewErrors",
     "drainPreviewErrors", "getProjectSupabaseLink",

@@ -63,8 +63,6 @@ import type {
   ListPreviewErrorsOptions,
   GetDailyPromptSuggestionOptions,
   DailyPromptSuggestionResponse,
-  CreatePromptIdeaRequest,
-  PromptIdeaResponse,
   ListPromptSuggestionsOptions,
   PromptSuggestionsPage,
   Project,
@@ -492,24 +490,6 @@ export class MichelangeloClient {
     return this.request<DailyPromptSuggestionResponse>(
       `/prompt-suggestions/daily?${params.toString()}`,
     );
-  }
-
-  /**
-   * `POST /prompt-ideas` — one AI-generated idea for the dice button of the
-   * create/edit screen. A new prompt on every call: the model avoids the
-   * ideas in `exclude` (the ones already shown), the user's recent apps and
-   * the prompts they already sent, and the server retries once if the answer
-   * repeats one. Costs one `michelangelo-fast` generation per call, so
-   * prefetch the next idea while the current one is on screen instead of
-   * calling on a cold tap. When generation fails the curated list answers
-   * with `source: "curated"` — still a usable `type: "prompt"` input for
-   * `POST /jobs`, so the button never dead-ends.
-   */
-  createPromptIdea(input: CreatePromptIdeaRequest = {}): Promise<PromptIdeaResponse> {
-    return this.request<PromptIdeaResponse>("/prompt-ideas", {
-      method: "POST",
-      body: input,
-    });
   }
 
   /**
