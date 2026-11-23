@@ -24,6 +24,10 @@
   ],
   "tags": [
     {
+      "name": "analytics",
+      "description": "Product analytics event ingestion (append-only ledger)"
+    },
+    {
       "name": "auth",
       "description": "Identity introspection for the current token"
     },
@@ -2823,6 +2827,52 @@
         }
       }
     },
+    "/events": {
+      "post": {
+        "tags": [
+          "analytics"
+        ],
+        "operationId": "trackEvents",
+        "summary": "Record a batch of product analytics events",
+        "description": "Appends client events to the `product_events` ledger. Events are batched (max 50), authenticated by the caller's JWT and written with the service role after validation; clients never write to the table directly. Use stable lowercase dot-separated names (`object.action`). Never send PII, prompt text, app content, email or tokens.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackEventsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Events accepted for ingestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackEventsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
     "/notifications": {
       "get": {
         "tags": [
@@ -3429,6 +3479,82 @@
                 "format": "date-time"
               }
             }
+          }
+        }
+      },
+      "ProductEventInput": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+            "description": "Stable lowercase dot-separated event name (`object.action`). Renaming splits the series; add a new name instead.\n"
+          },
+          "anonymous_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable per-installation id generated before login."
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Foreground session id, rotated on each app session."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Event-specific JSON. No PII, prompt text, app content, email or tokens; max 8 KB serialized.\n"
+          },
+          "app_version": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "web"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Client timestamp; the server also stores received_at."
+          }
+        }
+      },
+      "TrackEventsRequest": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/ProductEventInput"
+            }
+          }
+        }
+      },
+      "TrackEventsResponse": {
+        "type": "object",
+        "required": [
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

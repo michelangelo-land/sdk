@@ -99,8 +99,8 @@ const EXPECTED = {
   ],
   // Approved by the lead but not deployed yet. Offline tolerates their
   // absence (warning); the live check fails until the API ships them.
-  pendingDeploy: ["trackEvents"],
-  pendingDeployPaths: ["/events"],
+  pendingDeploy: [],
+  pendingDeployPaths: [],
 };
 
 function collectOperations(doc) {
