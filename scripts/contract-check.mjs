@@ -47,6 +47,7 @@ const EXPECTED = {
     "getSupabaseConnection", "disconnectSupabaseConnection", "getMyWallet", "getWalletSummary", "listMyTransactions", "getUsageSummary",
     "getUsageContributions",     "getUsageInsights", "listNotifications", "getUnreadCount",
     "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
+    "trackEvents",
     "listLiveActivityTokens", "registerLiveActivityToken", "removeLiveActivityToken",
     "registerLiveActivityUpdateToken", "removeLiveActivityUpdateToken",
   ],
@@ -66,7 +67,7 @@ const EXPECTED = {
     "/integrations/supabase/connection",
     "/wallets/me", "/wallets/me/summary", "/wallets/me/transactions", "/usage/summary", "/usage/contributions",
     "/usage/insights", "/notifications", "/notifications/unread-count",
-    "/notifications/{notificationId}", "/push-tokens", "/push-tokens/{token}",
+    "/notifications/{notificationId}", "/push-tokens", "/push-tokens/{token}", "/events",
     "/live-activity/tokens", "/live-activity/tokens/{token}",
     "/live-activity/update-tokens", "/live-activity/update-tokens/{jobId}",
   ],
@@ -87,6 +88,7 @@ const EXPECTED = {
     "getMyWallet", "getWalletSummary", "listMyTransactions", "getUsageSummary",
     "getUsageContributions", "getUsageInsights", "listNotifications", "getUnreadCount",
     "markNotificationRead", "markAllNotificationsRead", "registerPushToken", "removePushToken",
+    "trackEvents",
     "listLiveActivityTokens", "registerLiveActivityToken", "removeLiveActivityToken",
     "registerLiveActivityUpdateToken", "removeLiveActivityUpdateToken",
     "createBillingCheckout", "saveGithubInstallation", "unlinkGithubRepository",
@@ -97,7 +99,8 @@ const EXPECTED = {
   ],
   // Approved by the lead but not deployed yet. Offline tolerates their
   // absence (warning); the live check fails until the API ships them.
-  pendingDeploy: [],
+  pendingDeploy: ["trackEvents"],
+  pendingDeployPaths: ["/events"],
 };
 
 function collectOperations(doc) {
@@ -137,7 +140,12 @@ function validate(doc, label, { allowPending }) {
     else failures.push(`${label}: operation missing: ${op}`);
   }
   for (const path of EXPECTED.paths) {
-    if (!doc.paths?.[path]) failures.push(`${label}: path missing: ${path}`);
+    if (doc.paths?.[path]) continue;
+    if (allowPending && EXPECTED.pendingDeployPaths.includes(path)) {
+      warnings.push(`${label}: path pending API deploy: ${path}`);
+    } else {
+      failures.push(`${label}: path missing: ${path}`);
+    }
   }
   for (const path of paths) {
     if (!EXPECTED.paths.includes(path)) {
@@ -166,7 +174,9 @@ function compareVendoredToLive(vendored, live) {
   const vendoredPaths = [...vendored.paths].sort();
   const livePaths = [...live.paths].sort();
   const missingPaths = livePaths.filter((p) => !vendoredPaths.includes(p));
-  const extraPaths = vendoredPaths.filter((p) => !livePaths.includes(p));
+  const extraPaths = vendoredPaths.filter(
+    (p) => !livePaths.includes(p) && !EXPECTED.pendingDeployPaths.includes(p),
+  );
   if (missingPaths.length || extraPaths.length) {
     failures.push(
       `vendored openapi.json is stale — run \`npm run sync:openapi\`` +
@@ -178,7 +188,9 @@ function compareVendoredToLive(vendored, live) {
   const vendoredOps = [...vendored.operations.keys()].sort();
   const liveOps = [...live.operations.keys()].sort();
   const missingOps = liveOps.filter((op) => !vendoredOps.includes(op));
-  const extraOps = vendoredOps.filter((op) => !liveOps.includes(op));
+  const extraOps = vendoredOps.filter(
+    (op) => !liveOps.includes(op) && !EXPECTED.pendingDeploy.includes(op),
+  );
   if (missingOps.length || extraOps.length) {
     failures.push(
       `vendored openapi.json is stale — run \`npm run sync:openapi\`` +

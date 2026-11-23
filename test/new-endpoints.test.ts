@@ -691,3 +691,34 @@ describe("supabase disconnect + normalized view models", () => {
     });
   });
 });
+
+describe("analytics", () => {
+  it("trackEvents POSTs /events with the batch", async () => {
+    let seen: { url: string; method?: string; body: unknown } | null = null;
+    const fetchFn = stubFetch(async (url, init) => {
+      seen = {
+        url: String(url),
+        method: init?.method,
+        body: JSON.parse(String(init?.body)),
+      };
+      return json({ accepted: 2 }, 202);
+    });
+
+    const out = await authed(fetchFn).trackEvents({
+      events: [
+        { name: "app.open", properties: { cold: true } },
+        { name: "explore.opened", session_id: "00000000-0000-4000-8000-000000000001" },
+      ],
+    });
+
+    assert.equal(out.accepted, 2);
+    assert.ok(seen!.url.endsWith("/v1/events"));
+    assert.equal(seen!.method, "POST");
+    assert.deepEqual(seen!.body, {
+      events: [
+        { name: "app.open", properties: { cold: true } },
+        { name: "explore.opened", session_id: "00000000-0000-4000-8000-000000000001" },
+      ],
+    });
+  });
+});

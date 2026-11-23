@@ -75,6 +75,8 @@ import type {
   ReportResponse,
   ReshareRequest,
   ReshareResponse,
+  TrackEventsRequest,
+  TrackEventsResponse,
   SaveFilesRequest,
   SaveGithubInstallationRequest,
   StartSupabaseOAuthRequest,
@@ -970,6 +972,11 @@ export class MichelangeloClient {
       method: "PATCH",
       body: input,
     });
+  }
+
+  /** `POST /events` — append a batch of product analytics events (1–50). */
+  trackEvents(input: TrackEventsRequest): Promise<TrackEventsResponse> {
+    return this.request<TrackEventsResponse>("/events", { method: "POST", body: input });
   }
 
   /** `POST /push-tokens` — register an Expo token (upsert on conflict `token`). */

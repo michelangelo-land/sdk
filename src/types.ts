@@ -960,6 +960,33 @@ export interface RemovePushTokenRequest {
   token: string;
 }
 
+// --- analytics → `trackEvents` (POST /events) ---
+
+/** One product analytics event. Names are stable lowercase dot-separated (`object.action`). */
+export interface ProductEventInput {
+  name: string;
+  /** Stable per-installation id generated before login. */
+  anonymous_id?: string;
+  /** Foreground session id, rotated on each app session. */
+  session_id?: string;
+  /** Event-specific JSON. No PII, prompt text, app content, email or tokens. */
+  properties?: Record<string, unknown>;
+  app_version?: string;
+  platform?: "ios" | "web";
+  /** Client timestamp (ISO 8601). The server also stores received_at. */
+  created_at?: string;
+}
+
+/** `POST /events` body — 1 to 50 events per request. */
+export interface TrackEventsRequest {
+  events: ProductEventInput[];
+}
+
+/** `POST /events` response (202). */
+export interface TrackEventsResponse {
+  accepted: number;
+}
+
 // --- live-activity → `listLiveActivityTokens`/`registerLiveActivityToken`/`removeLiveActivityToken` ---
 
 /** `live_activity_push_tokens` row (safe columns). */
