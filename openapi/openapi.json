@@ -578,7 +578,7 @@
         ],
         "operationId": "getJob",
         "summary": "Get job status",
-        "description": "Polling endpoint. Clients should poll with backoff (suggested: 2s → 30s max). Returns the job row plus `estimated_duration_seconds` (p50 of recent succeeded prompt jobs, fallback 120s) and `queue_position` (0 when running, 1 when queued behind the single-active slot). A future version may offer realtime delivery (SSE / Realtime) without changing this contract.\n",
+        "description": "Polling endpoint. Clients should poll with backoff (suggested: 2s → 30s max). Returns the job row plus `estimated_duration_seconds` (p50 of recent succeeded prompt jobs, fallback 120s), `queue_position` (how many jobs the dispatcher starts before this one, 0-based; 0 while running and null once terminal) and `estimated_wait_seconds` (`queue_position` jobs drained at the dispatcher's worker count; 0 while running, null once terminal, never an SLA). Clients should show a queue state only when `queue_position` > 0. A future version may offer realtime delivery (SSE / Realtime) without changing this contract.\n",
         "security": [
           {
             "oauth2": []
@@ -4761,7 +4761,15 @@
               "integer",
               "null"
             ],
-            "description": "0 when running/first in queue, 1 when queued behind the single-active slot",
+            "description": "How many jobs the dispatcher starts before this one, 0-based: running jobs plus queued jobs it would claim first. 0 while running (or first in line), null once terminal.\n",
+            "example": 0
+          },
+          "estimated_wait_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Indicative wait before this job starts: `queue_position` drained at the number of dispatcher workers, using `estimated_duration_seconds` as the per-job time. 0 while running, null once terminal or when the position is unavailable. Never an SLA.\n",
             "example": 0
           }
         }

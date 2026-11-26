@@ -146,8 +146,14 @@ export interface Job {
    * Never an SLA — keep progress UI indeterminate.
    */
   estimated_duration_seconds?: number | null;
-  /** 0 for the active (queued/running) job, null once terminal. */
+  /**
+   * How many jobs the dispatcher starts before this one, 0-based: running
+   * jobs plus queued jobs it would claim first. 0 while running, null once
+   * terminal. Show a queue state only when it is greater than 0.
+   */
   queue_position?: number | null;
+  /** Indicative wait before this job starts, 0 while running, null once terminal. */
+  estimated_wait_seconds?: number | null;
 }
 
 export interface WaitForJobOptions {
