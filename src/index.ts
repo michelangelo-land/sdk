@@ -106,6 +106,7 @@ export type {
   ProjectFile,
   ProjectFileInput,
   ProjectFilesPage,
+  ProjectSourceImage,
   ProjectIconResult,
   ProjectPage,
   ProjectAuthor,
