@@ -449,7 +449,7 @@
         ],
         "operationId": "createJob",
         "summary": "Create an async job",
-        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt`: `input.prompt` is evaluated server-side (invalid → 400, quota → 429). The wallet balance does not gate job creation: spend is still recorded for every succeeded job, but the app is free while the balance model is off. When `project_id` is omitted (first generation) and the prompt is valid, the server creates the project synchronously via RPC `create_project` with the default template files and the evaluated `app_name`, fires icon generation fire-and-forget, then enqueues the job with the new `project_id` — so the runner always sees an edit and the client gets `project_id` immediately. Only one active job (`queued` or `running`) per user is allowed — a second `POST` while one is active returns `409 job_already_active` (poll `GET /jobs/{jobId}` on the active job instead). Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner). Top-level `supabase_project_ref` is folded into `input` the same way (top-level wins on conflict with the `input` key); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n",
+        "description": "Creates a job row (`status: queued`) and returns immediately with the row. The HTTP request never waits for the work itself — poll `GET /jobs/{jobId}` on the `status` field for progress. Status transitions are written directly to the jobs table.\n`type=prompt`: `input.prompt` is evaluated server-side (invalid → 400, quota → 429). When the request carries an attachment, the first image goes with the validation request so a photo-to-app prompt is judged on the picture and the app name comes from it; if the image cannot be read the check falls back to the text-only prompt. The wallet balance does not gate job creation: spend is still recorded for every succeeded job, but the app is free while the balance model is off. When `project_id` is omitted (first generation) and the prompt is valid, the server creates the project synchronously via RPC `create_project` with the default template files and the evaluated `app_name`, fires icon generation fire-and-forget, then enqueues the job with the new `project_id` — so the runner always sees an edit and the client gets `project_id` immediately. Only one active job (`queued` or `running`) per user is allowed — a second `POST` while one is active returns `409 job_already_active` (poll `GET /jobs/{jobId}` on the active job instead). Accepts a top-level `attachments` manifest from `POST /jobs/attachments` (stored in `job_attachments`, mirrored into `input.attachment_refs` for the runner). Top-level `supabase_project_ref` is folded into `input` the same way (top-level wins on conflict with the `input` key); the legacy in-`input` shape keeps working. `idempotency_key` (uuid): retry with the same key returns the existing job (200) instead of creating a duplicate.\n",
         "security": [
           {
             "oauth2": []
@@ -1315,6 +1315,53 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/source-image": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "getProjectSourceImage",
+        "summary": "Signed URL of the photo the project was created from",
+        "description": "\"The First Spark\" in App Settings. Returns a short-lived signed URL for the owner only (the row is read with RLS); another account gets the same 404 as a project without a photo. The object lives in the private `project-media` bucket and is deleted with the project or the account.\n",
+        "security": [
+          {
+            "oauth2": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed URL and capture time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSourceImage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -3641,6 +3688,34 @@
           },
           "shared": {
             "type": "boolean"
+          }
+        }
+      },
+      "ProjectSourceImage": {
+        "type": "object",
+        "required": [
+          "url",
+          "taken_at",
+          "expires_in"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Short-lived signed URL of the photo (private bucket).",
+            "example": "https://your-project.supabase.co/storage/v1/object/sign/project-media/42/first-spark.jpg?token=..."
+          },
+          "taken_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the photo was sent with the first generation."
+          },
+          "expires_in": {
+            "type": "integer",
+            "description": "Seconds the signed URL stays valid.",
+            "example": 3600
           }
         }
       },

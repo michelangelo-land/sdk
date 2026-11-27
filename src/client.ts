@@ -67,6 +67,7 @@ import type {
   PromptSuggestionsPage,
   Project,
   ProjectFilesPage,
+  ProjectSourceImage,
   ProjectPage,
   PublicProfile,
   RegisterPushTokenRequest,
@@ -577,6 +578,16 @@ export class MichelangeloClient {
     const query = options.type !== undefined ? `?type=${encodeURIComponent(options.type)}` : "";
     return this.request<ProjectFilesPage>(
       `/projects/${encodeURIComponent(String(projectId))}/files${query}`,
+    );
+  }
+
+  /**
+   * `GET /projects/{projectId}/source-image` — "The First Spark": the photo
+   * the app was created from, as a short-lived signed URL (owner only).
+   */
+  getProjectSourceImage(projectId: number): Promise<ProjectSourceImage> {
+    return this.request<ProjectSourceImage>(
+      `/projects/${encodeURIComponent(String(projectId))}/source-image`,
     );
   }
 

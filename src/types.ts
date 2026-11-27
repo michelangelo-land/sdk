@@ -320,6 +320,16 @@ export interface ProjectFilesPage {
   data: ProjectFile[];
 }
 
+/** `GET /projects/{id}/source-image` — "The First Spark" (owner only). */
+export interface ProjectSourceImage {
+  /** Short-lived signed URL of the photo (private bucket). */
+  url: string;
+  /** When the photo was sent with the first generation. */
+  taken_at: string | null;
+  /** Seconds the signed URL stays valid. */
+  expires_in: number;
+}
+
 export interface ListProjectFilesOptions {
   /** e.g. `CODE` — same view as `use-project-files.ts`. */
   type?: string;
